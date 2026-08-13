@@ -2,11 +2,11 @@
 
 All numbers below were measured on:
 
-| | |
-| --- | --- |
+|     |                                                                         |
+| --- | ----------------------------------------------------------------------- |
 | CPU | 12th Gen Intel Core i7-1255U (4 P-cores @ 4.7 GHz, 8 E-cores @ 3.5 GHz) |
-| OS | Linux 6.8, `GOARCH=amd64` |
-| Go | 1.26.1 |
+| OS  | Linux 6.8, `GOARCH=amd64`                                               |
+| Go  | 1.26.1                                                                  |
 
 Historical results from upstream (2012 Core 2 Quad, 2016 Core i5-4590) are preserved in
 [docs/historical-benchmarks.md](docs/historical-benchmarks.md).
@@ -45,13 +45,13 @@ and a change that looked like a 67% improvement against it turned out to be −3
 This is the number a user sees.
 
 | Operand size | `math/big` | `bigfft` | Speedup |
-| --- | ---: | ---: | ---: |
-| 200 kb | 996.1 µs | 765.4 µs | 1.3x |
-| 500 kb | 4.041 ms | 1.513 ms | 2.7x |
-| 1 Mb | 12.46 ms | 2.740 ms | 4.5x |
-| 2 Mb | 35.23 ms | 5.152 ms | 6.8x |
-| 5 Mb | 151.1 ms | 12.81 ms | 11.8x |
-| 10 Mb | 455.3 ms | 27.73 ms | 16.4x |
+| ------------ | ---------: | -------: | ------: |
+| 200 kb       |   996.1 µs | 765.4 µs |    1.3x |
+| 500 kb       |   4.041 ms | 1.513 ms |    2.7x |
+| 1 Mb         |   12.46 ms | 2.740 ms |    4.5x |
+| 2 Mb         |   35.23 ms | 5.152 ms |    6.8x |
+| 5 Mb         |   151.1 ms | 12.81 ms |   11.8x |
+| 10 Mb        |   455.3 ms | 27.73 ms |   16.4x |
 
 For scale, upstream's 2012 measurements reported −73% at 1 Mb and −89% at 10 Mb; the
 corresponding figures here are −78% and −94%.
@@ -66,23 +66,23 @@ Interleaved A/B against the pre-parallelization commit, 16 repetitions, all p < 
 Pinned to the four P-cores with `GOMAXPROCS=4` — the representative figure, since the
 cores are homogeneous:
 
-| Operand size | Serial | Parallel | Change |
-| --- | ---: | ---: | ---: |
-| 200 kb | 699.6 µs | 614.3 µs | −12.2% |
-| 500 kb | 1.567 ms | 1.215 ms | −22.5% |
-| 1 Mb | 3.498 ms | 2.444 ms | −30.1% |
-| 5 Mb | 22.11 ms | 12.58 ms | −43.1% |
-| 10 Mb | 53.86 ms | 28.01 ms | −48.0% |
+| Operand size |   Serial | Parallel | Change |
+| ------------ | -------: | -------: | -----: |
+| 200 kb       | 699.6 µs | 614.3 µs | −12.2% |
+| 500 kb       | 1.567 ms | 1.215 ms | −22.5% |
+| 1 Mb         | 3.498 ms | 2.444 ms | −30.1% |
+| 5 Mb         | 22.11 ms | 12.58 ms | −43.1% |
+| 10 Mb        | 53.86 ms | 28.01 ms | −48.0% |
 
 Whole machine, `taskset -c 0-11` with `GOMAXPROCS=12`:
 
-| Operand size | Serial | Parallel | Change |
-| --- | ---: | ---: | ---: |
-| 200 kb | 1.065 ms | 942.8 µs | −11.4% |
-| 500 kb | 2.391 ms | 1.721 ms | −28.0% |
-| 1 Mb | 5.340 ms | 2.929 ms | −45.2% |
-| 5 Mb | 28.85 ms | 12.54 ms | −56.5% |
-| 10 Mb | 68.56 ms | 25.59 ms | −62.7% |
+| Operand size |   Serial | Parallel | Change |
+| ------------ | -------: | -------: | -----: |
+| 200 kb       | 1.065 ms | 942.8 µs | −11.4% |
+| 500 kb       | 2.391 ms | 1.721 ms | −28.0% |
+| 1 Mb         | 5.340 ms | 2.929 ms | −45.2% |
+| 5 Mb         | 28.85 ms | 12.54 ms | −56.5% |
+| 10 Mb        | 68.56 ms | 25.59 ms | −62.7% |
 
 Note that at 200 kb the four-P-core configuration (614 µs) beats the whole machine
 (943 µs): once the E-cores join, the slowest shard sets the pace and small transforms do
@@ -101,10 +101,10 @@ Serial throughput costs about 1–2% at 5 Mb from the added indirection. Set
 
 Introducing a per-`fftmul` scratch arena, `MulFFT_1Mb`:
 
-| | B/op | allocs/op |
-| --- | ---: | ---: |
-| before | 3,681,869 | 30 |
-| after | 2,018,977 | 12 |
+|        |      B/op | allocs/op |
+| ------ | --------: | --------: |
+| before | 3,681,869 |        30 |
+| after  | 2,018,977 |        12 |
 
 Allocation counts are deterministic and unaffected by timing noise, which makes them the
 one metric on this machine that can be trusted without the pinning protocol. The

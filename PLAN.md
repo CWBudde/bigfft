@@ -36,13 +36,13 @@ code. The rules below are not optional.
 
 Profile of `Mul` at 5 Mb operands (single core, pinned), for reference:
 
-| Component | Share |
-| --- | ---: |
-| `fourier` transforms | ~45% |
-| — of which `fermat.Shift` | 22% |
-| — of which `fermat.Add` | 14.5% |
-| — of which `fermat.Sub` | 8.5% |
-| pointwise `polValues.Mul` | ~35% |
+| Component                      | Share |
+| ------------------------------ | ----: |
+| `fourier` transforms           |  ~45% |
+| — of which `fermat.Shift`      |   22% |
+| — of which `fermat.Add`        | 14.5% |
+| — of which `fermat.Sub`        |  8.5% |
+| pointwise `polValues.Mul`      |  ~35% |
 | `runtime.memclrNoHeapPointers` | ~6.6% |
 
 ## Done
@@ -141,7 +141,7 @@ executes at all. End-to-end: p = 0.97. Sixty lines of subtle carry logic for an
 unmeasurable gain. The tests were kept; the code was not.
 
 The general lesson is rule 5 above: this was proposed on a plausible reading of the
-profile (`fermat.Shift` at 22%) without checking which *path* through `Shift` that 22%
+profile (`fermat.Shift` at 22%) without checking which _path_ through `Shift` that 22%
 represented. It was the even path.
 
 ## Next

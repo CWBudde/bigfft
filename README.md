@@ -92,11 +92,11 @@ bigfft.SetMaxParallelism(0) // back to the default, GOMAXPROCS
 `Mul` versus `math/big` on a 12th Gen Core i7-1255U, default settings:
 
 | Operand size | `math/big` | `bigfft` | Speedup |
-| --- | ---: | ---: | ---: |
-| 200 kb | 996.1 µs | 765.4 µs | 1.3x |
-| 1 Mb | 12.46 ms | 2.740 ms | 4.5x |
-| 5 Mb | 151.1 ms | 12.81 ms | 11.8x |
-| 10 Mb | 455.3 ms | 27.73 ms | 16.4x |
+| ------------ | ---------: | -------: | ------: |
+| 200 kb       |   996.1 µs | 765.4 µs |    1.3x |
+| 1 Mb         |   12.46 ms | 2.740 ms |    4.5x |
+| 5 Mb         |   151.1 ms | 12.81 ms |   11.8x |
+| 10 Mb        |   455.3 ms | 27.73 ms |   16.4x |
 
 Below roughly 120 kbit `math/big` wins, and `Mul` dispatches to it
 automatically. Full results, the parallel speedup breakdown, and allocation
