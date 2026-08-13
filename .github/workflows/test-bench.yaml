@@ -28,8 +28,12 @@ jobs:
       - name: Run benchmarks
         run: scripts/run_benchmarks.sh benchmarks/latest-ubuntu-latest.txt
 
+      # Pinned: benchstat's CLI is not stable across revisions, and
+      # scripts/bench_compare.sh parses its CSV output. An earlier version of
+      # that script passed -delta-test=none, a flag that no longer exists, so
+      # the gate failed outright rather than gating anything.
       - name: Install benchstat
-        run: go install golang.org/x/perf/cmd/benchstat@latest
+        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260813145340-fd4a688df892
 
       - name: Compare against baseline
         run: scripts/bench_compare.sh benchmarks/baseline-ubuntu-latest.txt benchmarks/latest-ubuntu-latest.txt

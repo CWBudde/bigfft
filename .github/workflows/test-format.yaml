@@ -23,27 +23,31 @@ jobs:
       - name: Setup just
         uses: extractions/setup-just@v2
 
+      # Every formatter is pinned. `just fmt-check` fails on any diff, so an
+      # unpinned tool turns an upstream release into a red build on an
+      # unrelated PR. Bump these deliberately, in their own commit, with the
+      # reformatting that follows.
       - name: Install formatters
+        env:
+          TREEFMT_VERSION: 2.5.0
+          GOFUMPT_VERSION: v0.10.0
+          GCI_VERSION: v0.14.0
+          PRETTIER_VERSION: 3.8.5
+          MARKDOWNLINT_VERSION: 0.42.0
         run: |
-          # Install treefmt
-          curl -fsSL https://github.com/numtide/treefmt/releases/download/v2.1.1/treefmt_2.1.1_linux_amd64.tar.gz | sudo tar -C /usr/local/bin -xz treefmt
+          curl -fsSL "https://github.com/numtide/treefmt/releases/download/v${TREEFMT_VERSION}/treefmt_${TREEFMT_VERSION}_linux_amd64.tar.gz" \
+            | sudo tar -C /usr/local/bin -xz treefmt
 
-          # Install prettier and markdownlint.
-          #
-          # Versions are pinned deliberately. prettier 3.9.0 introduced a
-          # regression that makes markdown formatting non-idempotent on this
-          # repo: it re-indents deeply nested list content and grows PLAN.md by
-          # ~2.9 KB on every pass without ever reaching a fixed point, so
-          # `treefmt --fail-on-change` can never succeed. 3.8.5 is the newest
-          # release that is a clean no-op across all tracked markdown.
-          # Re-check 3.9.x before unpinning.
-          npm install -g prettier@3.8.5 markdownlint-cli@0.49.1
+          # prettier is held at 3.8.x deliberately. The sibling algo-fft repo
+          # found 3.9.0 non-idempotent on Markdown — it re-indents nested list
+          # content without reaching a fixed point, which `treefmt
+          # --fail-on-change` can never satisfy. That was observed there, not
+          # measured here; re-check 3.9.x on this repo's Markdown before
+          # unpinning.
+          npm install -g "prettier@${PRETTIER_VERSION}" "markdownlint-cli@${MARKDOWNLINT_VERSION}"
 
-          # Install gofumpt
-          go install mvdan.cc/gofumpt@latest
-
-          # Install gci
-          go install github.com/daixiang0/gci@latest
+          go install "mvdan.cc/gofumpt@${GOFUMPT_VERSION}"
+          go install "github.com/daixiang0/gci@${GCI_VERSION}"
 
       - name: Check formatting
         run: just fmt-check
