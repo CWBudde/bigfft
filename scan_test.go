@@ -31,7 +31,7 @@ func BenchmarkScanFast2M(b *testing.B)   { benchmarkScanFast(2e6, b) }
 func BenchmarkScanFast5M(b *testing.B)   { benchmarkScanFast(5e6, b) }
 func BenchmarkScanFast10M(b *testing.B)  { benchmarkScanFast(10e6, b) }
 
-//func BenchmarkScanFast100M(b *testing.B) { benchmarkScanFast(100e6, b) }
+// func BenchmarkScanFast100M(b *testing.B) { benchmarkScanFast(100e6, b) }
 
 func benchmarkScanFast(n int, b *testing.B) {
 	s := rndStr(n)

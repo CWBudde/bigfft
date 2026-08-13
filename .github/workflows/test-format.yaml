@@ -1,0 +1,53 @@
+name: test-format
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    name: Test Format
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup just
+        uses: extractions/setup-just@v2
+
+      # Every formatter is pinned. `just fmt-check` fails on any diff, so an
+      # unpinned tool turns an upstream release into a red build on an
+      # unrelated PR. Bump these deliberately, in their own commit, with the
+      # reformatting that follows.
+      - name: Install formatters
+        env:
+          TREEFMT_VERSION: 2.5.0
+          GOFUMPT_VERSION: v0.10.0
+          GCI_VERSION: v0.14.0
+          PRETTIER_VERSION: 3.8.5
+          MARKDOWNLINT_VERSION: 0.42.0
+        run: |
+          curl -fsSL "https://github.com/numtide/treefmt/releases/download/v${TREEFMT_VERSION}/treefmt_${TREEFMT_VERSION}_linux_amd64.tar.gz" \
+            | sudo tar -C /usr/local/bin -xz treefmt
+
+          # prettier is held at 3.8.x deliberately. The sibling algo-fft repo
+          # found 3.9.0 non-idempotent on Markdown — it re-indents nested list
+          # content without reaching a fixed point, which `treefmt
+          # --fail-on-change` can never satisfy. That was observed there, not
+          # measured here; re-check 3.9.x on this repo's Markdown before
+          # unpinning.
+          npm install -g "prettier@${PRETTIER_VERSION}" "markdownlint-cli@${MARKDOWNLINT_VERSION}"
+
+          go install "mvdan.cc/gofumpt@${GOFUMPT_VERSION}"
+          go install "github.com/daixiang0/gci@${GCI_VERSION}"
+
+      - name: Check formatting
+        run: just fmt-check

@@ -1,3 +1,3 @@
-module github.com/remyoudompheng/bigfft
+module github.com/cwbudde/bigfft
 
-go 1.12
+go 1.25.0

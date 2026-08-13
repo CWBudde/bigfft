@@ -9,6 +9,9 @@ import (
 	_ "unsafe"
 )
 
+// Word is an alias for big.Word, the unsigned machine word type used by
+// math/big to store the magnitude of an integer. It is exported so callers can
+// name the element type of the slices returned by (*big.Int).Bits.
 type Word = big.Word
 
 //go:linkname addVV math/big.addVV
@@ -25,9 +28,6 @@ func subVW(z, x []Word, y Word) (c Word)
 
 //go:linkname shlVU math/big.shlVU
 func shlVU(z, x []Word, s uint) (c Word)
-
-//go:linkname mulAddVWW math/big.mulAddVWW
-func mulAddVWW(z, x []Word, y, r Word) (c Word)
 
 //go:linkname addMulVVW math/big.addMulVVW
 func addMulVVW(z, x []Word, y Word) (c Word)
