@@ -122,6 +122,72 @@ one metric on this machine that can be trusted without the pinning protocol. The
 wall-clock effect of this change alone was within noise: the library is arithmetic-bound,
 not allocation-bound.
 
+## Balanced splitting in decimal scanning
+
+`FromDecimalString` splits its input, converts each half, and reassembles them with a
+multiplication by a power of ten. The old code split off `quadraticScanThreshold << (pow-1)`
+digits, the largest cached power of ten that fits — so the split ratio was set by
+`frac(log2(size/threshold))` and swung between roughly balanced and maximally lopsided
+depending on the input length. `scan.go` now splits exactly in half and builds a power
+table sized for that specific input, one entry per recursion depth, each the square of the
+next (times ten when the length is odd).
+
+Interleaved A/B, `taskset -c 0` with `GOMAXPROCS=1`, ten repetitions each:
+
+| Digits | 1k     | 10k     | 100k   | 1M     | 2M     | 5M    | 10M   |
+| ------ | ------ | ------- | ------ | ------ | ------ | ----- | ----- |
+| Δ      | ~      | -12.24% | -6.48% | -8.78% | -6.92% | ~     | ~     |
+| p      | (0.85) | 0.000   | 0.000  | 0.000  | 0.000  | 0.165 | 0.165 |
+
+And on four P-cores (`taskset -c 0-3`, `GOMAXPROCS=4`), eight repetitions:
+
+| Digits | 10k     | 100k   | 1M      | 10M   |
+| ------ | ------- | ------ | ------- | ----- |
+| Δ      | -12.51% | -9.54% | -10.43% | ~     |
+| p      | 0.000   | 0.000  | 0.007   | 0.878 |
+
+Geomean -4.0% serial, -8.3% parallel.
+
+**The 5M–10M columns are the honest caveat.** They are flat here, but a tighter run
+(twelve repetitions, ±1–2% instead of ±4–7%) measured **+1.8% and +3.7%** against the old
+code. The cause is worth recording because it is not about scanning at all:
+
+`valueSize` rounds a coefficient up to a multiple of `1 << (k-2)` bits, so `Mul` cost is a
+**step function of operand size with plateaus up to 25% wide**. Measured at k=12:
+
+```
+m=56..62  n=128   33-37 ms      <- 3% more data...
+m=64      n=144   43 ms         <- ...costs 30% more time
+m=72..78  n=160   48-52 ms
+```
+
+The old chunk length of `1232 << k` digits is about `2^(12+k)` bits, because 1232 digits is
+4092.8 bits — just under 4096. Every chunk therefore landed near the _top_ of a plateau by
+construction. Exact halving lands wherever the input happens to fall.
+
+Shading the split to recover that alignment does not work, and `TestCalibrateScanSplit`
+keeps the evidence: sweeping the top chunk from 90% to 100% of half, timings are flat from
+97% upward and degrade sharply below, because the imbalance compounds down the recursion
+faster than the alignment pays.
+
+```
+10M digits:  split 1000/1000  986 ms      975/1000  1002 ms
+             split  950/1000  1177 ms      900/1000  1845 ms
+```
+
+A cost model over the recursion tree agreed that near-exact halving is optimal, but
+predicted only a 1.7% gain from perfect alignment where the direct measurement shows 30%
+per node — the model treats cost as proportional to `n`, and the real function punishes an
+unlucky `n` far harder. That gap is itself the finding: **the packing waste in `valueSize`
+is worth up to 25% to every caller of `Mul`, not just to scanning**, and is listed as new
+work in [PLAN.md](PLAN.md).
+
+Two incidental results: the base of the power table is now built by binary exponentiation
+rather than `(10^14)^(threshold/14)`, so `quadraticScanThreshold` is no longer required to
+be a multiple of 14 — any value is legal. And inputs at or below the threshold skip the
+scanner entirely, which removed a 3.4% regression at 1,000 digits that the first version
+introduced.
+
 ## Threshold calibration
 
 Four constants decide which algorithm runs at which size, and all four were calibrated on
@@ -270,8 +336,7 @@ branch has no reachable decision to make on the public path regardless.
 
 ### `quadraticScanThreshold` — decimal scanning
 
-`TestCalibrateScan` sweeps twelve candidate thresholds (all multiples of 14, as `power(0)`
-requires) across seven input sizes, and value-checks every candidate against
+`TestCalibrateScan` sweeps twelve candidate thresholds across seven input sizes, and value-checks every candidate against
 `big.Int.SetString` so a wrong threshold fails as a wrong answer rather than a fast one.
 
 First, the prior question — whether `FromDecimalString` is worth using at all. Speedup over
@@ -306,7 +371,8 @@ cluster into tight families of thresholds related by exact powers of two.
 Within a family the timings agree to within 1%; between families they differ by up to 22%
 — and the ranking **inverts** between the two input sizes (A best at 1M, B best at 3M).
 
-The cause is structural. `chunkSize` splits at `quadraticScanThreshold << (pow-1)`, so only
+The cause is structural, and this sweep is what prompted the balanced-split rewrite above.
+At the time, `chunkSize` split at `quadraticScanThreshold << (pow-1)`, so only
 `frac(log2(size/threshold))` affects the recursion tree, which is why thresholds a power of
 two apart are indistinguishable. When that fraction is near 0.8 the split is close to
 balanced (0.43 / 0.57) and the recursive `Mul` is cheapest; as it approaches 0 the split
@@ -316,9 +382,10 @@ no fixed threshold can be right for every input.
 **Left unchanged at 1232.** There is no crossover to fit — only a quantization artifact —
 and 1232 is at or near the best candidate in every column where the function is worth using
 at all (best at 30k and 300k digits, tied at 1M, within 6% of best at 100k). Picking the
-winner at 3M digits would be fitting one input size. The real fix is balanced splitting in
-`chunkSize`, worth roughly 20% and independent of this constant; it is listed as new work
-in [PLAN.md](PLAN.md).
+winner at 3M digits would be fitting one input size. The real fix was balanced splitting,
+independent of this constant — see § Balanced splitting in decimal scanning above, which
+supersedes the split behaviour described here. The threshold itself was re-checked after
+that rewrite and remains at 1232.
 
 ## Benchmark inventory
 
@@ -330,10 +397,17 @@ in [PLAN.md](PLAN.md).
   separately), `Add`, `Sub`, `Mul` (both sides of the `fermatBasicMulThreshold` branch),
   `Transform`, `InvTransform`, `polValues.Mul`. Sizes are derived at run time from the real
   `fftSize`/`valueSize` path rather than hard-coded, so they remain correct on 32-bit.
-- `scan_test.go` — `BenchmarkScanFast*` / `BenchmarkScanBig*` for `FromDecimalString`.
+- `scan_test.go` — `BenchmarkScanFast*` / `BenchmarkScanBig*` for `FromDecimalString`, plus
+  `TestScanPowerTable` and `TestScanThresholds`. Those two are always-on guards on the
+  balanced-split power table: the table is built by repeated squaring with a correction for
+  odd lengths, so one wrong correction would produce a wrong number at one input size only.
+  `TestScanThresholds` also exercises thresholds that are not multiples of 14, which the
+  old power-of-ten base made illegal. Both were verified to fail when the correction is
+  removed.
 - `calibrate_test.go` — the `-calibrate`-gated sweeps: `TestCalibrateThreshold` and
   `TestCalibrateFFT` (the original bisecting harnesses), plus `TestCalibrateFFTTable`,
-  `TestCalibrateFermatMul` and `TestCalibrateScan` (flat grids). The flat grids report
+  `TestCalibrateFermatMul`, `TestCalibrateScan` and `TestCalibrateScanSplit` (flat grids).
+  The flat grids report
   minima of three runs rather than means, and label every `fermat.Mul` row reachable or
   informational so unreachable configurations cannot drive a constant.
 - `threshold_test.go` — always-on invariants, not gated behind `-calibrate`:

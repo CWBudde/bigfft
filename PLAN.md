@@ -14,6 +14,7 @@ tooling and pursues performance work the original explicitly left as a proof of 
 | Parallelism             | done                                               |
 | Allocation / arena      | done                                               |
 | Threshold recalibration | done: all four measured; one changed, three pinned |
+| Decimal scanning        | done: balanced split, -4% serial / -8% parallel    |
 | Plan 9 assembly         | not started (headline item)                        |
 | Cache blocking and rest | not started                                        |
 
@@ -151,7 +152,8 @@ full of `_W`-dependent word arithmetic. `GOARCH=386` is verified to vet and test
   - **`quadraticScanThreshold`: left at 1232.** The spread across candidates is not noise
     but recursion-tree quantization — thresholds a power of two apart time identically to
     within 1%, families differ by up to 22%, and the ranking inverts between input sizes.
-    See the new `chunkSize` item under "Smaller items".
+    That quantization is what prompted the balanced-split rewrite, done next and recorded
+    below; the threshold itself is still 1232 after it.
   - Two always-on guards were added and **verified to fail when reverted**:
     `TestFFTSizeThresholdMonotone` (`fftSize` takes the first entry `> bits`, so a
     non-monotone table silently picks the wrong `k` with nothing else failing) and
@@ -160,6 +162,30 @@ full of `_W`-dependent word arithmetic. `GOARCH=386` is verified to vet and test
     the 2012 constants were produced and it cannot tell a crossover from an oscillation —
     which is precisely what it did to `fftThreshold`. Every constant that moved here had a
     monotone curve _and_ an interleaved A/B on the public API behind it.
+
+- [x] **Balanced splitting in `scan.go`.** `FromDecimalString` now splits exactly in half
+      and builds a per-input power table (one entry per depth, each the square of the next,
+      times ten for odd lengths) instead of splitting off the largest cached
+      `quadraticScanThreshold << k` chunk. Interleaved A/B: **−12.2% at 10k digits, −6.5%
+      at 100k, −8.8% at 1M, −6.9% at 2M** serial, all p < 0.001; **−12.5 / −9.5 / −10.4%**
+      on four P-cores. Geomean −4.0% serial, −8.3% parallel.
+  - 5M–10M is flat in the ten-repetition run but measured **+1.8% and +3.7%** in a tighter
+    twelve-repetition one, and that regression is real. The old `1232 << k` chunk length is
+    about `2^(12+k)` bits (1232 digits = 4092.8, just under 4096), so every chunk landed
+    near the top of a `valueSize` plateau by construction. Exact halving lands wherever the
+    input falls. Reported rather than hidden.
+  - Recovering the alignment by shading the split **does not work**, and
+    `TestCalibrateScanSplit` keeps the evidence: from 97% to 100% of half the timings are
+    flat, and below that they degrade sharply (10M digits: 986 ms at exact half, 1.18 s at
+    95%, 1.85 s at 90%) because the imbalance compounds down the recursion faster than the
+    alignment pays.
+  - Incidental: the table base is now built by binary exponentiation, so
+    `quadraticScanThreshold` no longer has to be a multiple of 14 — any value is legal, and
+    the sweep in `TestCalibrateScan` may be widened accordingly. Inputs at or below the
+    threshold bypass the scanner entirely, which removed a 3.4% regression at 1k digits
+    that the first version introduced.
+  - `TestScanPowerTable` and `TestScanThresholds` are always-on guards, **verified to fail
+    when the odd-length correction is removed**.
 
 ## Tried and rejected
 
@@ -245,18 +271,23 @@ Plumbing required, modelled on the sibling `algo-fft` repository
       `big.Int.Mul`, once the values are large enough for that to pay.
 - [ ] **`sync.Pool` for arenas**, now that a per-call arena exists. Worth it only if a
       workload does many multiplies; measure before adding global state.
-- [ ] **Balanced splitting in `scan.go`'s `chunkSize`** — measured, and worth about 20%.
-      `chunkSize` splits at `quadraticScanThreshold << (pow-1)`, so the split ratio is
-      determined by `frac(log2(size/threshold))`: near 0.8 it is close to balanced
-      (0.43/0.57) and the recursive `Mul` is cheapest, near 0 it degenerates towards
-      maximally unbalanced. Because the fraction depends on the input size, no choice of
-      threshold fixes it — the split itself has to be balanced. Evidence: thresholds a
-      power of two apart time identically to within 1%, while families differ by up to 22%
-      and their ranking inverts between 1M and 3M digits. See BENCHMARKS.md.
+- [ ] **Coefficient packing waste in `valueSize`** — the largest unclaimed win on this
+      list, and it applies to every caller of `Mul`, not to one code path.
+      `valueSize` rounds a coefficient up to a multiple of `1 << (k-2)` bits, so `Mul` cost
+      is a step function of operand size with plateaus up to 25% wide. Measured at k=12:
+      `m` from 56 to 62 all cost 33–37 ms at `n=128`, and `m=64` jumps to 43 ms at `n=144`
+      — **30% more time for 3% more data**. An operand that lands just past a boundary pays
+      for a whole extra step. Directions worth trying: pick `k` by modelled cost rather
+      than by a size table (the table cannot see where inside a plateau a size falls), or
+      relax the `1 << (k-2)` rounding, whose `extra=2` slack may be more than correctness
+      needs. Note that the measured penalty is far larger than the ratio of `n` values, so
+      whatever model is used must be fitted against measurements, not derived from `n`
+      alone — a tree-cost model built on `n` under-predicted this by more than 10x. See
+      BENCHMARKS.md § Balanced splitting.
 - [ ] **Reuse scan temporaries** — `scan.go` carries a `// FIXME: reuse temporaries.` and
-      allocates a fresh `big.Int` per recursion level. Note this interacts with the item
-      above: `FromDecimalString` builds a fresh `scanner` per call, so
-      `power(0) = (10^14)^(threshold/14)` is recomputed inside every measurement.
+      allocates a fresh `big.Int` per recursion level. `FromDecimalString` also builds a
+      fresh power table per call, which is now sized for the specific input and so cannot
+      be cached across calls of different lengths — but the `Mul` destinations can be.
 - [ ] **Wisdom-style persisted auto-tuning** to replace the hand-run `-calibrate` flag.
 - [ ] **Fuzz targets** for `Mul` and `FromDecimalString`, wired to a time-budgeted CI job.
 - [ ] **Big-endian coverage**. 32-bit is already covered by the `GOARCH=386` leg.

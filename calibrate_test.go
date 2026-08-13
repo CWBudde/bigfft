@@ -403,8 +403,12 @@ func TestCalibrateFermatMul(t *testing.T) {
 	}
 }
 
-// scanThresholdCandidates are the quadraticScanThreshold values to sweep. All
-// must be multiples of 14, since power(0) is built as (10^14)^(threshold/14).
+// scanThresholdCandidates are the quadraticScanThreshold values to sweep.
+//
+// They are all multiples of 14 for continuity with the 2026 sweep, which ran
+// when power(0) was built as (10^14)^(threshold/14) and no other value was
+// legal. The balanced-split rewrite builds the base by binary exponentiation,
+// so that constraint is gone and any value may be added here.
 var scanThresholdCandidates = []int{
 	280, 560, 840, 1120, 1232, 1400, 1680, 2240, 2800, 3360, 4480, 6720,
 }
@@ -420,19 +424,14 @@ var scanDigitSizes = []int{1e3, 3e3, 1e4, 3e4, 1e5, 3e5, 1e6, 3e6, 1e7}
 // against Go's own subquadratic SetString, and the FFT never engages.
 //
 // One confound is reported rather than corrected: FromDecimalString builds a
-// fresh scanner per call, so power(0) = (10^14)^(threshold/14) is recomputed
-// inside the measured region. A larger threshold makes that setup dearer while
-// reducing recursion depth, which entangles this constant with the "reuse scan
+// fresh scanner per call, so the whole power table is rebuilt inside the
+// measured region. A larger threshold makes that setup dearer while reducing
+// recursion depth, which entangles this constant with the "reuse scan
 // temporaries" item in PLAN.md.
 func TestCalibrateScan(t *testing.T) {
 	if !*calibrate {
 		t.Log("not calibrating, use -calibrate to do so.")
 		return
-	}
-	for _, thr := range scanThresholdCandidates {
-		if thr%14 != 0 {
-			t.Fatalf("candidate threshold %d is not a multiple of 14; power() would panic", thr)
-		}
 	}
 
 	old := quadraticScanThreshold
@@ -476,5 +475,65 @@ func TestCalibrateScan(t *testing.T) {
 				thr, roundDur(tFast), float64(tBig)/float64(tFast), mark)
 		}
 		quadraticScanThreshold = old
+	}
+}
+
+// scanSplitPerMille are candidate top-chunk lengths for the scan recursion,
+// in per mille of half the input. 1000 is the shipped exact halving.
+var scanSplitPerMille = []int{900, 930, 950, 960, 970, 975, 980, 985, 990, 995, 1000}
+
+// TestCalibrateScanSplit sweeps where scan splits its input.
+//
+// The question it answers is whether the recursion should split exactly in half,
+// or shade the split so that the children land higher inside a valueSize
+// plateau. valueSize rounds a coefficient up to a multiple of 1<<(k-2) bits, so
+// Mul cost is a step function of operand size with plateaus up to 25% wide: at
+// k=12 every m from 56 to 63 costs the same ~33 ms, and m=64 jumps to ~43 ms for
+// 3% more data. Shrinking the chunk can therefore drop a child a whole step.
+//
+// The 2026 answer was no: timings are flat from 970 to 1000 and degrade sharply
+// below that (at 10M digits, 986 ms at 1000 against 1.85 s at 900), because the
+// imbalance compounds down the recursion faster than the alignment pays. The
+// sweep is kept so the verdict can be rechecked if fftSizeThreshold moves, since
+// the plateau boundaries move with it.
+func TestCalibrateScanSplit(t *testing.T) {
+	if !*calibrate {
+		t.Log("not calibrating, use -calibrate to do so.")
+		return
+	}
+	for _, size := range scanDigitSizes {
+		if size <= 4*quadraticScanThreshold || size > *calibrateMaxDigits {
+			continue
+		}
+		s := rndStr(size)
+		want, ok := new(big.Int).SetString(s, 10)
+		if !ok {
+			t.Fatalf("cannot parse a %d-digit random string", size)
+		}
+		fmt.Printf("\n=== %d digits\n", size)
+		for _, pm := range scanSplitPerMille {
+			top := (size / 2) * pm / 1000
+			run := func() *big.Int {
+				var sc scanner
+				sc.initAt(size, top)
+				z := new(big.Int)
+				sc.scan(z, s, 0)
+				return z
+			}
+			// A bad split must fail as a wrong answer, not a slow one.
+			if got := run(); got.Cmp(want) != 0 {
+				t.Fatalf("split %d/1000: scan is wrong at %d digits", pm, size)
+			}
+			d := benchMin(func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					run()
+				}
+			})
+			mark := ""
+			if pm == 1000 {
+				mark = "  <- shipped (exact half)"
+			}
+			fmt.Printf("  split %4d/1000  top=%-9d %s%s\n", pm, top, roundDur(d), mark)
+		}
 	}
 }
