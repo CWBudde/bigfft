@@ -89,8 +89,16 @@ func (z fermat) Shift(x fermat, k int) {
 	} else {
 		addVW(z, z, 1)
 	}
-	// Shift left by kb bits
-	shlVU(z, z, uint(kb))
+	// Shift left by kb bits.
+	//
+	// A word-aligned shift (kb == 0) needs no bit shifting at all, and
+	// shlVU(z, z, 0) is a full-length copy of z onto itself. Skipping it
+	// removes one pass over the whole buffer: measured on the Mul path,
+	// 41% (5Mb) to 71% (1Mb) of Shift calls are word-aligned, and shlVU
+	// accounts for ~11% of total runtime.
+	if kb != 0 {
+		shlVU(z, z, uint(kb))
+	}
 	z.norm()
 }
 
