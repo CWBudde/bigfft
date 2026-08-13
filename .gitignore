@@ -21,3 +21,8 @@ dist/
 # IDE and editor files
 .vscode/
 .idea/
+
+# Claude Code scratch state, including agent git worktrees. These contain full
+# copies of the tree, so leaving them untracked keeps gofmt/golangci-lint from
+# walking them.
+.claude/
