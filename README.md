@@ -75,9 +75,37 @@ n := bigfft.FromDecimalString(digits)
 fmt.Println(n.BitLen())
 ```
 
+### Controlling parallelism
+
+The FFT is parallelized across `GOMAXPROCS` by default for inputs large enough
+to benefit; smaller multiplications stay serial. Results are bit-identical
+either way — only scheduling changes.
+
+```go
+bigfft.SetMaxParallelism(1) // fully serial
+bigfft.SetMaxParallelism(4) // at most 4 workers
+bigfft.SetMaxParallelism(0) // back to the default, GOMAXPROCS
+```
+
 ## Performance
 
-Benchmark results live in [BENCHMARKS.md](BENCHMARKS.md).
+`Mul` versus `math/big` on a 12th Gen Core i7-1255U, default settings:
+
+| Operand size | `math/big` | `bigfft` | Speedup |
+| --- | ---: | ---: | ---: |
+| 200 kb | 996.1 µs | 765.4 µs | 1.3x |
+| 1 Mb | 12.46 ms | 2.740 ms | 4.5x |
+| 5 Mb | 151.1 ms | 12.81 ms | 11.8x |
+| 10 Mb | 455.3 ms | 27.73 ms | 16.4x |
+
+Below roughly 120 kbit `math/big` wins, and `Mul` dispatches to it
+automatically. Full results, the parallel speedup breakdown, and allocation
+figures are in [BENCHMARKS.md](BENCHMARKS.md).
+
+**If you intend to benchmark this library, read
+[the measurement protocol](BENCHMARKS.md#how-to-reproduce--read-this-first)
+first.** On hybrid P/E-core CPUs, unpinned measurements on this code have been
+observed to be wrong by 16x — far more than any difference worth measuring.
 
 The original 2012/2016-era measurements from upstream (Core 2 Quad and Core
 i5-4590) are preserved in

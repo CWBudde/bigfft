@@ -75,6 +75,24 @@ full of `_W`-dependent word arithmetic. `GOARCH=386` is verified to vet and test
 
 ### Performance
 
+- **Parallelism** (`parallel.go`): the pointwise multiply (~35% of runtime), the `fourier`
+  recursion and its butterfly loops (~45%) are sharded across up to `GOMAXPROCS` workers
+  via a `parRange` helper that runs the last shard inline and spawns only `w-1`
+  goroutines. `SetMaxParallelism`/`MaxParallelism` control it; below
+  `parallelWordThreshold` (8192 words of transform array, measured) it stays serial.
+  Results are bit-identical to the serial path — only scheduling changes.
+  - Measured on four pinned P-cores: −22.5% at 500 kb, −30.1% at 1 Mb, −43.1% at 5 Mb,
+    −48.0% at 10 Mb (all p < 0.001). Whole machine at 10 Mb: −62.7%. Serial cost ~1–2%.
+  - The two forward transforms were **left sequential**: both stage through arena region
+    `a`, so running them concurrently needs a fourth `N*K` staging region (+33% working
+    set) to buy at most 2x, whereas the intra-transform sharding needs no extra storage
+    and scales further.
+  - Trap: passing a closure to `parRange` from inside the recursion heap-allocated one
+    closure per node (10 → 791 allocs/op). Extracting `butterflies()` and calling it
+    directly in the serial case fixed it.
+  - Race coverage was **verified, not assumed**: deliberately pointing two workers at a
+    shared buffer produces `DATA RACE` reports in both `polValues.mul` and the butterfly
+    loop. A green `-race` run proves nothing if the parallel path never ran.
 - **Scratch arena** (`fftScratch`): one allocation set per `fftmul` call, replacing
   per-stage `make` calls in five places. `MulFFT_1Mb` went from 30 allocations and
   3.68 MB per operation to 12 allocations and 2.02 MB — 60% fewer allocations, 45% less
@@ -130,37 +148,27 @@ represented. It was the even path.
 
 Roughly in expected-value order.
 
-### 1. Parallelism
+### 1. A separate threshold for the parallel path
 
-The library is strictly single-threaded on machines that are not. Two independent
-opportunities:
-
-- **Pointwise multiply** (~35% of runtime): `polValues.mul` is a flat loop of K
-  independent `fermat.Mul` calls. Embarrassingly parallel; each worker needs its own `8n`
-  scratch buffer.
-- **`fourier` recursion** (~45%): the two recursive calls are independent subtrees.
-  Parallelize the top few levels only, staying serial below a depth cutoff so deep levels
-  remain cache-resident. Each concurrent branch needs its own `fourierTemps` — which is
-  why `fourierTmp` already takes them as a parameter.
-
-Requires a `SetMaxParallelism` knob (default `GOMAXPROCS`, `1` = serial) and a size
-threshold below which small multiplies stay serial. Results must be bit-identical to the
-serial path; only scheduling changes.
-
-Amdahl bound: with ~80% of runtime parallelizable, four P-cores cap the speedup at ~2.5x.
-Do not expect more, and be suspicious of any measurement that claims it.
+`fftThreshold` was calibrated with parallelism disabled, deliberately, so that it stays
+correct for callers using `SetMaxParallelism(1)`. But with parallelism on the FFT starts
+winning below 1800 words, so the default dispatch switches later than it should. A second,
+lower threshold selected when parallelism is active would pick up the range between the
+two crossovers. Measure both crossovers under the protocol above before choosing numbers.
 
 ### 2. Threshold recalibration
 
 `fftThreshold = 1800`, the `fftSizeThreshold` table, `quadraticScanThreshold = 1232`, and
 `fermat.Mul`'s `n < 30` basicMul cutoff were all calibrated on a Core 2 Quad around 2012,
 against a `math/big` whose Karatsuba and assembly kernels have improved substantially
-since. `calibrate_test.go` already implements the measurement behind a `-calibrate` flag
-(`just calibrate`); it needs to be run under the pinning protocol above and the constants
-updated, with the measured values and machine recorded in `BENCHMARKS.md`.
+since. `fftThreshold` has now been re-measured serially and pinned: the speedup oscillates
+between 0.75 and 1.11 across the crossover region with no clean transition, and the
+existing 1800 words sits at the low edge of that band. **It was left unchanged** — the
+2012 value is still approximately right, and picking a new number from that data would be
+fitting noise. See BENCHMARKS.md.
 
-Cheap, zero-risk, and most valuable near the crossover sizes where the stale constants
-are most wrong.
+Still outstanding: `quadraticScanThreshold = 1232` in `scan.go` and `fermat.Mul`'s
+`n < 30` basicMul cutoff, neither of which has been re-measured.
 
 ### 3. Plan 9 assembly
 

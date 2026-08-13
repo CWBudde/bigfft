@@ -8,24 +8,31 @@ import (
 	"testing"
 )
 
-// parSizes are operand sizes in words chosen to land on a particular FFT
-// size. fftSize picks k from the total bit length of the product, so an
-// operand of w words gives 2*w*_W bits and, on a 64-bit machine:
+// parSizes are operand sizes chosen to land on a particular FFT size.
+// fftSize picks k from the total bit length of the product, so the sizes are
+// given in bits and converted to words at run time: expressing them directly
+// in words would select a different k on 32-bit platforms, where the same
+// word count is half the bits.
 //
-//	20000 words -> 2.44 Mbit  -> k=10
-//	40000 words -> 4.88 Mbit  -> k=11
-//	70000 words -> 8.54 Mbit  -> k=12
+//	1.28 Mbit per operand -> 2.44 Mbit product -> k=10
+//	2.56 Mbit per operand -> 4.88 Mbit product -> k=11
+//	4.48 Mbit per operand -> 8.54 Mbit product -> k=12
 //
 // The table is checked against fftSize in TestParallelCoversLargeK rather
 // than trusted, so a change to fftSizeThreshold cannot silently turn these
 // tests into small-k tests.
-var parSizes = []struct {
-	words int
-	k     uint
-}{
-	{20000, 10},
-	{40000, 11},
-	{70000, 12},
+type parSize struct {
+	bits int
+	k    uint
+}
+
+// words returns the operand size in machine words on the current platform.
+func (ps parSize) words() int { return ps.bits / _W }
+
+var parSizes = []parSize{
+	{20000 * 64, 10},
+	{40000 * 64, 11},
+	{70000 * 64, 12},
 }
 
 // withParallelism sets the worker cap for the duration of the test and
@@ -47,15 +54,15 @@ func TestParallelCoversLargeK(t *testing.T) {
 		t.Skipf("GOMAXPROCS=%d, nothing to parallelise", runtime.GOMAXPROCS(0))
 	}
 	for _, ps := range parSizes {
-		x, y := make(nat, ps.words), make(nat, ps.words)
+		x, y := make(nat, ps.words()), make(nat, ps.words())
 		k, m := fftSize(x, y)
 		if k != ps.k {
-			t.Errorf("%d words: fftSize gave k=%d, want %d", ps.words, k, ps.k)
+			t.Errorf("%d words: fftSize gave k=%d, want %d", ps.words(), k, ps.k)
 		}
 		n := valueSize(k, m, 2)
 		if w := parallelWorkers(k, n); w < 2 {
 			t.Errorf("%d words (k=%d, n=%d): parallelWorkers=%d, the parallel "+
-				"path is not being exercised", ps.words, k, n, w)
+				"path is not being exercised", ps.words(), k, n, w)
 		}
 	}
 }
@@ -73,8 +80,8 @@ func TestParallelBitIdentical(t *testing.T) {
 	rng := rand.New(rand.NewSource(0xfeed5))
 	for _, ps := range sizes {
 		for it := 0; it < iters; it++ {
-			xb := arenaRandNat(rng, ps.words)
-			yb := arenaRandNat(rng, ps.words+it) // vary the second operand
+			xb := arenaRandNat(rng, ps.words())
+			yb := arenaRandNat(rng, ps.words()+it) // vary the second operand
 			x, y := natToInt(xb), natToInt(yb)
 
 			withParallelism(t, 1)
@@ -117,7 +124,7 @@ func TestParallelBitIdentical(t *testing.T) {
 func TestParallelBitIdenticalAcrossWorkerCounts(t *testing.T) {
 	ps := parSizes[0]
 	rng := rand.New(rand.NewSource(0xc0ffee))
-	xb, yb := arenaRandNat(rng, ps.words), arenaRandNat(rng, ps.words)
+	xb, yb := arenaRandNat(rng, ps.words()), arenaRandNat(rng, ps.words())
 	x, y := natToInt(xb), natToInt(yb)
 
 	withParallelism(t, 1)
@@ -143,7 +150,7 @@ func TestParallelSaturatedOperands(t *testing.T) {
 		sizes = parSizes[:1]
 	}
 	for _, ps := range sizes {
-		xb := make(nat, ps.words)
+		xb := make(nat, ps.words())
 		for i := range xb {
 			xb[i] = ^big.Word(0)
 		}
@@ -175,8 +182,8 @@ func TestParallelConcurrentMuls(t *testing.T) {
 	ys := make([]*big.Int, n)
 	want := make([]*big.Int, n)
 	for i := range xs {
-		xs[i] = natToInt(arenaRandNat(rng, ps.words))
-		ys[i] = natToInt(arenaRandNat(rng, ps.words+i))
+		xs[i] = natToInt(arenaRandNat(rng, ps.words()))
+		ys[i] = natToInt(arenaRandNat(rng, ps.words()+i))
 		want[i] = new(big.Int).Mul(xs[i], ys[i])
 	}
 	got := make([]*big.Int, n)
