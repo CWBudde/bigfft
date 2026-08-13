@@ -1,0 +1,141 @@
+version = "2"
+
+[linters]
+default = 'all'
+disable = [
+    # asciicheck: θ, ω and friends name the roots of unity in the transform
+    # exactly as the literature does; ASCII-only identifiers would cost the
+    # correspondence between the code and the Schönhage-Strassen write-up.
+    'asciicheck',
+    # depguard: a single-package library with no third-party dependencies has
+    # no import policy worth encoding; the allowlist would be math/big alone.
+    'depguard',
+    # dupl: the Fermat carry-handling branches and the forward/inverse
+    # transform bodies are structural near-twins by construction, and tests
+    # are table-driven twins per word size.
+    'dupl',
+    # err113: this package reports programming errors by panicking (the
+    # math/big convention it mirrors); it defines no error values at all.
+    'err113',
+    # exhaustruct: poly/polValues are built field-by-field in the transform
+    # pipeline, where zero fields (notably poly.m) are meaningful.
+    'exhaustruct',
+    # gochecknoglobals/-inits: fftThreshold and fftSizeThreshold are the
+    # tuning tables the calibration test rewrites; package-level state is the
+    # design.
+    'gochecknoglobals',
+    'gochecknoinits',
+    # godox: the upstream FIXME in scan.go records a known allocation
+    # inefficiency; keeping the marker is more useful than hiding it.
+    'godox',
+    # funcorder: fermat's methods are ordered by algorithm layering
+    # (normalization, then shifts, then add/sub/mul), which reads better than
+    # exported-before-unexported.
+    'funcorder',
+    # gomodguard: deprecated since golangci-lint v2.12.0 in favour of
+    # gomodguard_v2, which default = 'all' already enables. Disabling the old
+    # one silences the deprecation warning without losing the check.
+    'gomodguard',
+    # gosec: the whole package is unchecked word arithmetic on slices by
+    # design (integer overflow and conversions are the algorithm), so every
+    # G1xx report here is noise.
+    'gosec',
+    # ireturn: not applicable — the public surface returns *big.Int and the
+    # internal helpers return concrete nat/fermat/poly types.
+    'ireturn',
+    # nlreturn: blank-line-before-return is a formatting opinion that fights
+    # the tight carry-propagation blocks in fermat.go.
+    'nlreturn',
+    # noinlineerr: `if err := f(); err != nil` is idiomatic Go.
+    'noinlineerr',
+    # nonamedreturns: fftSize returns the (k, m) pair that the whole file
+    # talks about by name; naming the results is the documentation.
+    'nonamedreturns',
+    # paralleltest: the calibration and large-multiplication tests are
+    # memory-hungry and deliberately run sequentially.
+    'paralleltest',
+    # varnamelen: z, x, y, k, m, n, kw, kb, ω, θ are the vocabulary of
+    # Schönhage-Strassen and of math/big's word arithmetic; renaming them to
+    # satisfy a length rule would obscure the math, not clarify it.
+    'varnamelen',
+    'wsl',
+    # wsl_v5: v4 was already disabled above; v5 only crept in via
+    # default = 'all'.
+    'wsl_v5',
+]
+enable = [
+    "revive",
+]
+
+[linters.settings.revive]
+# Package-level names follow math/big (nat, fermat, _W, shlVU); var-naming's
+# Go-style rules would rename the mirrored identifiers away from their
+# upstream counterparts.
+[[linters.settings.revive.rules]]
+name = "var-naming"
+disabled = true
+
+# The public surface is four symbols (Mul, FromDecimalString, Word, and the
+# package doc); requiring GoDoc on all of them is cheap and worth enforcing.
+[[linters.settings.revive.rules]]
+name = "exported"
+
+[linters.exclusions]
+generated = 'lax'
+presets = ['comments', 'common-false-positives', 'legacy', 'std-error-handling']
+paths = ['third_party$', 'builtin$']
+
+# Word sizes, bit counts, chunk thresholds and FFT radices are the domain:
+# 2, 4, 8, 14, 1<<10 and friends are the algorithm's constants, not magic.
+[[linters.exclusions.rules]]
+linters = ['mnd']
+path = '.*\.go'
+
+[[linters.exclusions.rules]]
+linters = ['testpackage']
+path = '.*_test\.go'
+
+# Tests favor exhaustive tables and inline literals over factored helpers.
+[[linters.exclusions.rules]]
+linters = ['cyclop', 'funlen', 'gocognit', 'lll', 'maintidx', 'nestif']
+path = '.*_test\.go'
+
+# The calibration test is a measurement tool that reports its table on stdout
+# (forbidigo), rounds durations with the classic divide/multiply idiom
+# (durationcheck), and inherits upstream's loop and helper conventions
+# (intrange/thelper/gocritic). It is run by hand via `just calibrate`.
+[[linters.exclusions.rules]]
+linters = ['durationcheck', 'forbidigo', 'gocritic', 'intrange', 'modernize', 'prealloc', 'thelper']
+path = '.*_test\.go'
+
+# fermat.Mul, fermat.Shift and fourier are long linear bodies by
+# construction: modular reduction and carry restoration are sequences of
+# conditional word fixups that only make sense read top to bottom. Splitting
+# them into helpers would hide the invariant each step maintains.
+[[linters.exclusions.rules]]
+linters = ['cyclop', 'funlen', 'gocognit', 'lll', 'maintidx', 'nestif']
+path = '^(fermat|fft)\.go$'
+
+# The same bodies carry deliberate "dead" bookkeeping: `c = 1` and the c2/z[n]
+# re-initializations state the invariant each branch establishes even where a
+# later write makes them redundant, and the if/else carry chains and manual
+# index loops are the shape math/big uses for the same fixups. Rewriting any
+# of it (switch, range-over-int, max) would be a change to audited arithmetic
+# for style alone.
+[[linters.exclusions.rules]]
+linters = ['gocritic', 'ineffassign', 'intrange', 'modernize', 'wastedassign']
+path = '^(fermat|fft)\.go$'
+
+[severity]
+default = 'warn'
+
+[[severity.rules]]
+linters = ['exhaustive', 'godox']
+severity = 'info'
+
+[formatters]
+enable = ['gofumpt', 'goimports']
+
+[formatters.exclusions]
+generated = 'lax'
+paths = ['third_party$', 'builtin$']

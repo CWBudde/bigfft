@@ -319,7 +319,7 @@ func BenchmarkMul_20Mb(b *testing.B)  { benchmarkMul(b, 20e6, 20e6) }
 func BenchmarkMul_50Mb(b *testing.B)  { benchmarkMul(b, 50e6, 50e6) }
 func BenchmarkMul_100Mb(b *testing.B) { benchmarkMul(b, 100e6, 100e6) }
 
-// Unbalanced multiplication benchmarks
+// Unbalanced multiplication benchmarks.
 func BenchmarkMul_1x5Mb(b *testing.B)  { benchmarkMul(b, 1e6, 5e6) }
 func BenchmarkMul_1x10Mb(b *testing.B) { benchmarkMul(b, 1e6, 10e6) }
 func BenchmarkMul_1x20Mb(b *testing.B) { benchmarkMul(b, 1e6, 20e6) }

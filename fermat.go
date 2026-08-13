@@ -25,7 +25,7 @@ func (z fermat) norm() {
 		return
 	}
 	// z[0] < z[n].
-	subVW(z, z, c) // Substract c
+	subVW(z, z, c) // Subtract c
 	if c > 1 {
 		z[n] -= c - 1
 		c = 1
@@ -34,9 +34,8 @@ func (z fermat) norm() {
 	if z[n] == 1 {
 		z[n] = 0
 		return
-	} else {
-		addVW(z, z, 1)
 	}
+	addVW(z, z, 1)
 }
 
 // Shift computes (x << k) mod (2^n+1).
@@ -122,7 +121,7 @@ func (z fermat) Add(x, y fermat) fermat {
 	return z
 }
 
-// Sub computes substraction mod 2^n+1.
+// Sub computes subtraction mod 2^n+1.
 func (z fermat) Sub(x, y fermat) fermat {
 	if len(z) != len(x) {
 		panic("Add: len(z) != len(x)")
@@ -187,7 +186,7 @@ func (z fermat) Mul(x, y fermat) fermat {
 		c2 = subVW(z[m:n], z[m:n], c2)
 	}
 	// Restore carries.
-	// Substracting z[n] -= c2 is the same
+	// Subtracting z[n] -= c2 is the same
 	// as z[0] += c2
 	z = z[:n+1]
 	z[n] = c1

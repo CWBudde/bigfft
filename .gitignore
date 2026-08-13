@@ -1,0 +1,23 @@
+# Test binaries, built with `go test -c`
+*.test
+
+# Profiler output
+*.prof
+
+# Output of the go coverage tool
+*.out
+coverage.txt
+coverage.html
+
+# Build artifacts
+dist/
+
+# Benchmark run output. The committed historical result files in benchmarks/
+# (bench, bench.big, bench.fft, bench.gmp, scan.big, scan.bigfft) are tracked
+# on purpose, so only the generated latest-*/benchstat files are ignored.
+/benchmarks/latest-*.txt
+/benchmarks/benchstat.txt
+
+# IDE and editor files
+.vscode/
+.idea/

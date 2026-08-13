@@ -1,0 +1,17 @@
+# Coverage gate for the single bigfft package. Coverage is uploaded by the
+# test-unit workflow.
+coverage:
+  status:
+    project:
+      default:
+        target: 80%
+        threshold: 1%
+    patch:
+      default:
+        # Informational: the package is small enough that a single new helper
+        # can swing per-patch coverage; the project gate is the enforced one.
+        informational: true
+
+comment:
+  layout: "condensed_header, diff, flags"
+  require_changes: true
