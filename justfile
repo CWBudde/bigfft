@@ -48,11 +48,25 @@ clean:
     rm -rf dist/
     find . -type f \( -name '*.test' -o -name '*.prof' \) -delete
 
-# Re-measure the FFT-vs-math/big crossover point.
-# Prints the measured speedups so fftThreshold in fft.go can be retuned; see
-# TestCalibrate in calibrate_test.go.
+# Re-measure every tuning constant: fftThreshold and the fftSizeThreshold
+# table (fft.go), fermatBasicMulThreshold (fermat.go) and
+# quadraticScanThreshold (scan.go). See calibrate_test.go, and BENCHMARKS.md
+# for the results and the pinning protocol — run these on a quiet machine
+# under `taskset -c 0` with GOMAXPROCS=1, or the numbers are fiction.
 calibrate:
-    go test -v -run=TestCalibrate -timeout=60m -calibrate
+    go test -v -run=TestCalibrate -timeout=600m -calibrate
+
+# The FFT-vs-math/big crossover (fftThreshold) and the FFT size table.
+calibrate-fft:
+    go test -v -run='TestCalibrateThreshold|TestCalibrateFFT' -timeout=600m -calibrate
+
+# The basicMul / big.Int.Mul crossover in fermat.Mul.
+calibrate-fermat:
+    go test -v -run=TestCalibrateFermatMul -timeout=60m -calibrate
+
+# The decimal scanning threshold, and FromDecimalString vs big.Int.SetString.
+calibrate-scan:
+    go test -v -run=TestCalibrateScan -timeout=120m -calibrate
 
 # Vet on every supported word size / architecture. arith_decl.go's
 # //go:linkname pulls into math/big and the _W-dependent word arithmetic in

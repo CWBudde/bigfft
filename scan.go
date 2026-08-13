@@ -39,7 +39,7 @@ func (s *scanner) power(k uint) *big.Int {
 			if quadraticScanThreshold%14 != 0 {
 				panic("quadraticScanThreshold % 14 != 0")
 			}
-			z.Exp(big.NewInt(1e14), big.NewInt(quadraticScanThreshold/14), nil)
+			z.Exp(big.NewInt(1e14), big.NewInt(int64(quadraticScanThreshold/14)), nil)
 		} else {
 			z.Mul(s.powers[i-1], s.powers[i-1])
 		}
@@ -67,4 +67,8 @@ func (s *scanner) scan(z *big.Int, str string) {
 // below which big.Int.SetString is more efficient
 // than subquadratic algorithms.
 // 1232 digits fit in 4096 bits.
-const quadraticScanThreshold = 1232
+//
+// It must be a multiple of 14, since power(0) is built as (10^14)^(threshold/14);
+// this is checked at run time in power. It is a var only so that the calibration
+// harness can sweep it; production code never assigns to it.
+var quadraticScanThreshold = 1232
