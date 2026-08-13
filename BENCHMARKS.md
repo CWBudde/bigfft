@@ -113,9 +113,36 @@ not allocation-bound.
 
 ## Threshold calibration
 
-`just calibrate` (`go test -run=TestCalibrate -calibrate`) measures the `math/big` vs FFT
-crossover. Run serially and pinned (`taskset -c 0`, `GOMAXPROCS=1`), so the resulting
-threshold stays correct for callers who disable parallelism:
+Four constants decide which algorithm runs at which size, and all four were calibrated on
+a Core 2 Quad around 2012, against a `math/big` whose Karatsuba and assembly kernels have
+improved substantially since:
+
+| Constant                  | Where          | Decides                                     |
+| ------------------------- | -------------- | ------------------------------------------- |
+| `fftThreshold`            | `fft.go`       | `math/big` vs FFT                           |
+| `fftSizeThreshold`        | `fft.go`       | the FFT length `1<<k` for a given size       |
+| `fermatBasicMulThreshold` | `fermat.go`    | schoolbook vs `big.Int.Mul` for coefficients |
+| `quadraticScanThreshold`  | `scan.go`      | `SetString` vs recursive decimal scanning    |
+
+`just calibrate` runs all four sweeps; `just calibrate-fft`, `just calibrate-fermat` and
+`just calibrate-scan` run them individually. Run serially and pinned
+(`taskset -c 0`, `GOMAXPROCS=1`) on an otherwise idle machine, so the resulting constants
+stay correct for callers who disable parallelism.
+
+Two of the sweeps deliberately publish a flat grid rather than bisecting to a single
+number. Bisection is how the 2012 constants were produced, and it cannot distinguish a
+crossover from an oscillation — which is exactly what re-measuring `fftThreshold` found.
+The decision rule used throughout, fixed before looking at any data:
+
+> A constant changes only if the sweep shows a monotone crossover rather than oscillation,
+> the candidate beats the incumbent by ≥5% on an interleaved A/B of the *public*
+> benchmarks with p < 0.05, and nothing on the other side of the crossover regresses by
+> more than 2%.
+
+**Measured and left unchanged** is a first-class outcome here, and three of the four
+entries below are exactly that.
+
+### `fftThreshold` — `math/big` vs FFT
 
 ```
 120,600 bits: 1.01      133,756 bits: 0.75      166,048 bits: 1.11
@@ -131,6 +158,31 @@ right on modern hardware, and picking a new number from this data would be fitti
 One consequence worth knowing: with parallelism enabled the FFT wins earlier than 1800
 words, so the default dispatch switches slightly later than optimal. A separate, lower
 threshold for the parallel case is listed as future work in [PLAN.md](PLAN.md).
+
+### `fermatBasicMulThreshold` — schoolbook vs `big.Int.Mul`
+
+Before timing anything, `TestFermatBasicMulThresholdReachable` (always on, not gated
+behind `-calibrate`) settles how much this constant can possibly matter. The coefficient
+size `n` is not a free parameter: `fftSize` picks `k` from `fftSizeThreshold`, `k` and the
+word count give `m`, and `n` is `valueSize(k, m, 2)`. So the set of `n` that `fermat.Mul`
+ever sees is a function of the size table, and it is small:
+
+| Word size          | Reachable configurations | On the `basicMul` side              |
+| ------------------ | -----------------------: | ----------------------------------- |
+| 64-bit             |                      319 | 5 (`n` = 20, 22, 24, 26, 28)        |
+| 32-bit (`GOARCH=386`) |                   476 | **0**                               |
+
+On 64-bit those five occupy a single window, **131.2 kbit to 211.4 kbit per operand** — the
+bottom of the `k=9` bracket, immediately above where `fftThreshold` hands work to the FFT
+at all. Above 211.4 kbit the branch is never taken again, because every higher `k` bracket
+starts at `n ≥ 36`. On 32-bit the branch is unreachable through the public `Mul` entirely;
+it exists there only for direct `mulFFT` / `poly.Mul` callers, which is why
+`BenchmarkFermatMul` hard-codes a synthetic `n=16` case to keep that side covered on every
+platform.
+
+This is rule 5 of the measurement discipline applied before the fact rather than after:
+whatever the timings say, this constant can only move an 80 kbit-wide sliver of one word
+size.
 
 ## Benchmark inventory
 
