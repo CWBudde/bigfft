@@ -1,16 +1,16 @@
-This library is a toy proof-of-concept implementation of the
-well-known Schonhage-Strassen method for multiplying integers.
-It is not expected to have a real life usecase outside number
-theory computations, nor is it expected to be used in any production
-system.
+# Historical benchmarks
 
-If you are using it in your project, you may want to carefully
-examine the actual requirement or problem you are trying to solve.
+These tables are preserved verbatim from the original upstream README
+(`github.com/remyoudompheng/bigfft`). They are kept for the historical record
+only: the hardware is from 2012 (Core 2 Quad) and 2016 (Core i5-4590), and the
+numbers predate many Go compiler and `math/big` improvements. Current
+measurements live in `BENCHMARKS.md`.
 
-# Comparison with the standard library and GMP
+## Comparison with the standard library and GMP
 
 Benchmarking math/big vs. bigfft
 
+```text
 Number size    old ns/op    new ns/op    delta
   1kb               1599         1640   +2.56%
  10kb              61533        62170   +1.04%
@@ -22,9 +22,11 @@ Number size    old ns/op    new ns/op    delta
  20Mb        11514488000    845081600  -92.66%
  50Mb        49199945000   2893950000  -94.12%
 100Mb       147599836000   5921594000  -95.99%
+```
 
 Benchmarking GMP vs bigfft
 
+```text
 Number size   GMP ns/op     Go ns/op    delta
   1kb                536         1500  +179.85%
  10kb              26669        50777  +90.40%
@@ -36,13 +38,16 @@ Number size   GMP ns/op     Go ns/op    delta
  20Mb          490196000    671512800  +36.99%
  50Mb         1280000000   2451476000  +91.52%
 100Mb         2673000000   5228991000  +95.62%
+```
 
 Benchmarks were run on a Core 2 Quad Q8200 (2.33GHz).
 FFT is enabled when input numbers are over 200kbits.
 
-Scanning large decimal number from strings.
+## Scanning large decimal numbers from strings
+
 (math/big [n^2 complexity] vs bigfft [n^1.6 complexity], Core i5-4590)
 
+```text
 Digits    old ns/op      new ns/op      delta
 1e3            9995          10876     +8.81%
 1e4          175356         243806    +39.03%
@@ -51,4 +56,4 @@ Digits    old ns/op      new ns/op      delta
 2e6      6865499995      346540778    -94.95%
 5e6     42641034189     1069878799    -97.49%
 10e6   151975273589     2693328580    -98.23%
-
+```

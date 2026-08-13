@@ -1,0 +1,41 @@
+name: test-bench
+
+# Benchmarks run nightly and on demand, never as a PR gate: shared runners are
+# far too noisy to threshold multi-megabit multiplication timings. Results are
+# uploaded as artifacts; the comparison against a committed baseline
+# (benchmarks/baseline-<os>.txt) is a soft no-op until a baseline exists.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: Benchmark Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run benchmarks
+        run: scripts/run_benchmarks.sh benchmarks/latest-ubuntu-latest.txt
+
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@latest
+
+      - name: Compare against baseline
+        run: scripts/bench_compare.sh benchmarks/baseline-ubuntu-latest.txt benchmarks/latest-ubuntu-latest.txt
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmarks-ubuntu-latest
+          path: benchmarks

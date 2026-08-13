@@ -1,0 +1,93 @@
+name: test-arch
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test-cross-arch:
+    name: Test ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # amd64 on Linux
+          - goos: linux
+            goarch: amd64
+            os: ubuntu-latest
+            race: true
+
+          # 386 on Linux (no race detector). The most important row in this
+          # matrix: fermat.go's arithmetic is written in terms of _W (the
+          # machine word size) and arith_decl.go links straight into
+          # math/big's per-architecture assembly, so a 32-bit word is a
+          # genuinely different code path.
+          - goos: linux
+            goarch: 386
+            os: ubuntu-latest
+            race: false
+
+          # arm64 on Linux (cross-compile, executed under QEMU)
+          - goos: linux
+            goarch: arm64
+            os: ubuntu-latest
+            race: false
+            use_qemu: true
+
+          # arm64 on macOS (native)
+          - goos: darwin
+            goarch: arm64
+            os: macos-latest
+            race: true
+
+          # amd64 on Windows
+          - goos: windows
+            goarch: amd64
+            os: windows-latest
+            race: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up QEMU (ARM64 cross-compile)
+        if: matrix.use_qemu
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -v ./...
+
+      # go vet is what catches //go:linkname declarations that have drifted
+      # from math/big's per-architecture signatures, so it must stay green on
+      # every GOARCH, not just the host one.
+      - name: Vet
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go vet ./...
+
+      - name: Run tests (with race detector)
+        if: matrix.race
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go test -v -race -count=1 -timeout=20m ./...
+
+      - name: Run tests (without race detector)
+        if: ${{ !matrix.race }}
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go test -v -count=1 -timeout=30m ./...
