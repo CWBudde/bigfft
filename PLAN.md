@@ -7,15 +7,15 @@ tooling and pursues performance work the original explicitly left as a proof of 
 
 ## Status at a glance
 
-| Area                    | Progress                                                |
-| ----------------------- | ------------------------------------------------------- |
-| Tooling and CI          | done                                                    |
-| Benchmarks              | done                                                    |
-| Parallelism             | done                                                    |
-| Allocation / arena      | done                                                    |
-| Threshold recalibration | partial: `fftThreshold` measured and pinned; three left |
-| Plan 9 assembly         | not started (headline item)                             |
-| Cache blocking and rest | not started                                             |
+| Area                    | Progress                                           |
+| ----------------------- | -------------------------------------------------- |
+| Tooling and CI          | done                                               |
+| Benchmarks              | done                                               |
+| Parallelism             | done                                               |
+| Allocation / arena      | done                                               |
+| Threshold recalibration | done: all four measured; one changed, three pinned |
+| Plan 9 assembly         | not started (headline item)                        |
+| Cache blocking and rest | not started                                        |
 
 ## Measurement discipline (read this before touching performance)
 
@@ -82,10 +82,10 @@ full of `_W`-dependent word arithmetic. `GOARCH=386` is verified to vet and test
 ### Benchmarks
 
 - [x] `fermat_bench_test.go` — micro-benchmarks for `Shift`, `ShiftHalf` (even and odd
-      paths measured separately), `Add`, `Sub`, `Mul` (both sides of the `n < 30` branch),
-      `Transform`, `InvTransform`, `polValues.Mul`. Sizes are derived at run time from the
-      real `fftSize`/`valueSize` path rather than hard-coded, so they stay correct on
-      32-bit.
+      paths measured separately), `Add`, `Sub`, `Mul` (both sides of the
+      `fermatBasicMulThreshold` branch), `Transform`, `InvTransform`, `polValues.Mul`.
+      Sizes are derived at run time from the real `fftSize`/`valueSize` path rather than
+      hard-coded, so they stay correct on 32-bit.
 
 ### Performance
 
@@ -128,6 +128,38 @@ full of `_W`-dependent word arithmetic. `GOARCH=386` is verified to vet and test
       the even-`n` (word-aligned halves) case was entirely untested.
       `fermat_shifthalf_test.go` adds value-based checks against `big.Int` across even and
       odd `n`, negative `k`, `k > 2N`, and `k` near multiples of `N`.
+- [x] **Threshold recalibration.** All four 2012-era constants re-measured under the
+      protocol above; one changed, three pinned with the data published in BENCHMARKS.md.
+      `quadraticScanThreshold` and `fermat.Mul`'s cutoff are now `var`s so the harness can
+      sweep them; production never assigns to them.
+  - **`fftSizeThreshold[8]`: `1<<18` → `1<<19`** — the only change. At the old boundary an
+    FFT of length `1<<8` beat the `1<<9` the table switched to by 20%, monotonically, with
+    parity only at twice the boundary. Interleaved A/B on the public `Mul`: **−21.7% at
+    150 kbit, −11.0% at 200 kbit, −8.1% at 250 kbit** serial (−24.1 / −13.8 / −12.4% on
+    four P-cores), all p < 0.001, with `Mul_100kb` (below `fftThreshold`, never enters
+    `fftmul`) flat as a control and no regression at 500 kbit or 1 Mb.
+  - Entries 3–7 show the identical shape but lie entirely below `fftThreshold`, so the
+    public `Mul` cannot select them and no end-to-end benchmark can confirm a change.
+    **Left unchanged** deliberately. Entries 9–13 oscillate across 1.0 — the `fftThreshold`
+    signature — and 14–15 were not measured (629 Mbit operands exceed available memory).
+  - **`fermat.Mul`'s cutoff: left at 30.** From `n=14` to `n=48` schoolbook and
+    `big.Int.Mul` are within 1.00 ± 3% of each other with no crossover; the two have simply
+    converged. And the table change moved the 131–211 kbit window from `k=9` to `k=8`,
+    so `basicMul` is now **unreachable through the public `Mul` on both word sizes** (it
+    already was on 386). `TestFermatBasicMulThresholdReachable` enumerates this mechanically
+    and will say so again if the table moves.
+  - **`quadraticScanThreshold`: left at 1232.** The spread across candidates is not noise
+    but recursion-tree quantization — thresholds a power of two apart time identically to
+    within 1%, families differ by up to 22%, and the ranking inverts between input sizes.
+    See the new `chunkSize` item under "Smaller items".
+  - Two always-on guards were added and **verified to fail when reverted**:
+    `TestFFTSizeThresholdMonotone` (`fftSize` takes the first entry `> bits`, so a
+    non-monotone table silently picks the wrong `k` with nothing else failing) and
+    `TestFermatBasicMulThresholdReachable`.
+  - Method note: the new sweeps publish a flat grid instead of bisecting. Bisection is how
+    the 2012 constants were produced and it cannot tell a crossover from an oscillation —
+    which is precisely what it did to `fftThreshold`. Every constant that moved here had a
+    monotone curve _and_ an interleaved A/B on the public API behind it.
 
 ## Tried and rejected
 
@@ -174,23 +206,7 @@ Roughly in expected-value order.
 correct for callers using `SetMaxParallelism(1)`. Measure both crossovers under the
 protocol above before choosing numbers.
 
-### 2. Threshold recalibration
-
-`fftThreshold = 1800`, the `fftSizeThreshold` table, `quadraticScanThreshold = 1232`, and
-`fermat.Mul`'s `n < 30` basicMul cutoff were all calibrated on a Core 2 Quad around 2012,
-against a `math/big` whose Karatsuba and assembly kernels have improved substantially
-since.
-
-- [x] `fftThreshold` re-measured serially and pinned. The speedup oscillates between 0.75
-      and 1.11 across the crossover region with no clean transition, and the existing 1800
-      words sits at the low edge of that band. **Left unchanged** — the 2012 value is still
-      approximately right, and picking a new number from that data would be fitting noise.
-      See BENCHMARKS.md.
-- [ ] `quadraticScanThreshold = 1232` in `scan.go` — not yet re-measured.
-- [ ] `fermat.Mul`'s `n < 30` basicMul cutoff — not yet re-measured.
-- [ ] The `fftSizeThreshold` table — not yet re-measured.
-
-### 3. Plan 9 assembly
+### 2. Plan 9 assembly
 
 The headline long-term item, and the reason to care about it is not only speed:
 `arith_decl.go` pulls seven unexported symbols out of `math/big` via `//go:linkname`.
@@ -220,7 +236,7 @@ Plumbing required, modelled on the sibling `algo-fft` repository
       against the Go declarations; this is what catches decl↔asm drift).
 - [ ] Assembly-vs-Go differential tests, in the style of the `ShiftHalf` differential test.
 
-### 4. Smaller items
+### 3. Smaller items
 
 - [ ] **Cache-blocked / six-step transform** for sizes whose working set exceeds L2. At
       5 Mb the transform is memory-bound, which is also why fusing passes is the recurring
@@ -229,8 +245,18 @@ Plumbing required, modelled on the sibling `algo-fft` repository
       `big.Int.Mul`, once the values are large enough for that to pay.
 - [ ] **`sync.Pool` for arenas**, now that a per-call arena exists. Worth it only if a
       workload does many multiplies; measure before adding global state.
+- [ ] **Balanced splitting in `scan.go`'s `chunkSize`** — measured, and worth about 20%.
+      `chunkSize` splits at `quadraticScanThreshold << (pow-1)`, so the split ratio is
+      determined by `frac(log2(size/threshold))`: near 0.8 it is close to balanced
+      (0.43/0.57) and the recursive `Mul` is cheapest, near 0 it degenerates towards
+      maximally unbalanced. Because the fraction depends on the input size, no choice of
+      threshold fixes it — the split itself has to be balanced. Evidence: thresholds a
+      power of two apart time identically to within 1%, while families differ by up to 22%
+      and their ranking inverts between 1M and 3M digits. See BENCHMARKS.md.
 - [ ] **Reuse scan temporaries** — `scan.go` carries a `// FIXME: reuse temporaries.` and
-      allocates a fresh `big.Int` per recursion level.
+      allocates a fresh `big.Int` per recursion level. Note this interacts with the item
+      above: `FromDecimalString` builds a fresh `scanner` per call, so
+      `power(0) = (10^14)^(threshold/14)` is recomputed inside every measurement.
 - [ ] **Wisdom-style persisted auto-tuning** to replace the hand-run `-calibrate` flag.
 - [ ] **Fuzz targets** for `Mul` and `FromDecimalString`, wired to a time-budgeted CI job.
 - [ ] **Big-endian coverage**. 32-bit is already covered by the `GOARCH=386` leg.

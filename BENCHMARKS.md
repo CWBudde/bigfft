@@ -56,6 +56,17 @@ This is the number a user sees.
 For scale, upstream's 2012 measurements reported −73% at 1 Mb and −89% at 10 Mb; the
 corresponding figures here are −78% and −94%.
 
+**Stale row.** The 200 kb figures predate the `fftSizeThreshold[8]` change below, which is
+worth −11% to −14% at that size, so the 1.3x understates current performance. The row was
+deliberately **not** patched in place: a spot re-measurement put `MulBig_200kb` — code the
+change does not touch — at 756 µs against the 996 µs recorded here, which shows the machine
+is in a different state than when this table was captured. Splicing one fresh number into
+it would produce a table whose rows are not mutually comparable, which is the
+before/after error the protocol forbids. The whole table needs regenerating in one quiet
+session; until then, the interleaved A/B under
+[`fftSizeThreshold`](#fftsizethreshold--the-fft-length-for-a-given-size) is the sound
+measurement of that change.
+
 Below roughly 120 kbit `math/big` wins and `Mul` dispatches to it automatically — see
 [Threshold calibration](#threshold-calibration).
 
@@ -117,12 +128,12 @@ Four constants decide which algorithm runs at which size, and all four were cali
 a Core 2 Quad around 2012, against a `math/big` whose Karatsuba and assembly kernels have
 improved substantially since:
 
-| Constant                  | Where          | Decides                                     |
-| ------------------------- | -------------- | ------------------------------------------- |
-| `fftThreshold`            | `fft.go`       | `math/big` vs FFT                           |
-| `fftSizeThreshold`        | `fft.go`       | the FFT length `1<<k` for a given size       |
-| `fermatBasicMulThreshold` | `fermat.go`    | schoolbook vs `big.Int.Mul` for coefficients |
-| `quadraticScanThreshold`  | `scan.go`      | `SetString` vs recursive decimal scanning    |
+| Constant                  | Where       | Decides                                      |
+| ------------------------- | ----------- | -------------------------------------------- |
+| `fftThreshold`            | `fft.go`    | `math/big` vs FFT                            |
+| `fftSizeThreshold`        | `fft.go`    | the FFT length `1<<k` for a given size       |
+| `fermatBasicMulThreshold` | `fermat.go` | schoolbook vs `big.Int.Mul` for coefficients |
+| `quadraticScanThreshold`  | `scan.go`   | `SetString` vs recursive decimal scanning    |
 
 `just calibrate` runs all four sweeps; `just calibrate-fft`, `just calibrate-fermat` and
 `just calibrate-scan` run them individually. Run serially and pinned
@@ -135,7 +146,7 @@ crossover from an oscillation — which is exactly what re-measuring `fftThresho
 The decision rule used throughout, fixed before looking at any data:
 
 > A constant changes only if the sweep shows a monotone crossover rather than oscillation,
-> the candidate beats the incumbent by ≥5% on an interleaved A/B of the *public*
+> the candidate beats the incumbent by ≥5% on an interleaved A/B of the _public_
 > benchmarks with p < 0.05, and nothing on the other side of the crossover regresses by
 > more than 2%.
 
@@ -159,6 +170,63 @@ One consequence worth knowing: with parallelism enabled the FFT wins earlier tha
 words, so the default dispatch switches slightly later than optimal. A separate, lower
 threshold for the parallel case is listed as future work in [PLAN.md](PLAN.md).
 
+### `fftSizeThreshold` — the FFT length for a given size
+
+`TestCalibrateFFTTable` sweeps a flat grid around every boundary, comparing FFT length
+`1<<k` against `1<<(k+1)` at the same input size. A ratio above 1.0 means `k+1` is the
+better choice there, so a well-placed boundary shows the ratios crossing 1.0 near factor
+1.0 and staying above it.
+
+The result splits into two regimes. Entries 3 to 8 are monotone and all say the same
+thing — `k+1` never wins anywhere in its own bracket, reaching parity only at twice the
+incumbent boundary. Entry 8, the lowest one the public `Mul` can select:
+
+```
+--- k=8 vs k=9, incumbent boundary 262144 bits total = 2048 words/operand
+  f=0.50  w=1024   k=8 225µs   k=9 351µs   ratio 0.642
+  f=0.70  w=1433   k=8 272µs   k=9 416µs   ratio 0.655
+  f=0.85  w=1740   k=8 320µs   k=9 399µs   ratio 0.801
+  f=1.00  w=2048   k=8 384µs   k=9 484µs   ratio 0.793   <- incumbent boundary
+  f=1.20  w=2457   k=8 471µs   k=9 560µs   ratio 0.840
+  f=1.50  w=3072   k=8 562µs   k=9 628µs   ratio 0.895
+  f=2.00  w=4096   k=8 803µs   k=9 804µs   ratio 0.998
+```
+
+Entries 9 to 13 are the opposite — non-monotone, oscillating across 1.0. `k=9` vs `k=10`
+gives 0.745, 0.753, **1.019**, 0.941, 0.900, **1.027**, 1.126: the `fftThreshold`
+signature again, and not actionable. `k=12` vs `k=13` leans the other way (`k=13` wins
+from `f=0.5` up, hinting that boundary is too high) but is likewise non-monotone. Entries
+14 and 15 were **not measured**: their brackets need operands up to 629 Mbit, past the
+memory available on this machine. They are recorded as a gap rather than extrapolated.
+
+**Entry 8 was changed, `1<<18` → `1<<19`.** Interleaved A/B, 10 repetitions each,
+`BenchmarkMul_*` (the threshold-dispatched path users actually get):
+
+| Benchmark   | serial, `taskset -c 0` |            | 4 P-cores, `GOMAXPROCS=4` |            |
+| ----------- | ---------------------: | ---------: | ------------------------: | ---------: |
+| `Mul_100kb` |    239.2 µs → 238.2 µs | ~ (p=0.97) |       244.8 µs → 247.2 µs | ~ (p=0.53) |
+| `Mul_150kb` |    564.6 µs → 442.0 µs | **−21.7%** |       523.1 µs → 396.9 µs | **−24.1%** |
+| `Mul_200kb` |    634.9 µs → 564.9 µs | **−11.0%** |       559.8 µs → 482.6 µs | **−13.8%** |
+| `Mul_250kb` |    805.5 µs → 740.5 µs |  **−8.1%** |       657.2 µs → 575.6 µs | **−12.4%** |
+| `Mul_500kb` |    1.454 ms → 1.453 ms | ~ (p=0.53) |       1.039 ms → 1.019 ms | ~ (p=0.12) |
+| `Mul_1Mb`   |    3.074 ms → 3.055 ms | ~ (p=0.25) |       2.115 ms → 2.102 ms | ~ (p=0.68) |
+
+All changes p < 0.001. `Mul_100kb` is the control: it is below `fftThreshold`, never
+enters `fftmul`, and does not move. The far side does not regress. The gradient across
+the window — largest just above the old boundary, decaying as `k=9` becomes competitive —
+is the shape the sweep predicted, measured through an independent code path.
+
+Entries 3 to 7 show the identical shape but their whole range lies below `fftThreshold`
+(32.8 kbit per operand at most, against `fftThreshold`'s 115.2 kbit), so the public `Mul`
+can never select them and no end-to-end benchmark can confirm a change there. **They were
+left unchanged**: the data is real, but a constant that only internal callers reach,
+adjusted on evidence that cannot be validated through the public API, is how the 2012
+numbers earned their reputation.
+
+The physical reading is the premise of this whole exercise confirmed: for small operands
+fewer, larger coefficients now beat more, smaller ones, because `big.Int.Mul`'s Karatsuba
+and assembly kernels have improved far more since 2012 than the butterfly loops have.
+
 ### `fermatBasicMulThreshold` — schoolbook vs `big.Int.Mul`
 
 Before timing anything, `TestFermatBasicMulThresholdReachable` (always on, not gated
@@ -167,33 +235,112 @@ size `n` is not a free parameter: `fftSize` picks `k` from `fftSizeThreshold`, `
 word count give `m`, and `n` is `valueSize(k, m, 2)`. So the set of `n` that `fermat.Mul`
 ever sees is a function of the size table, and it is small:
 
-| Word size          | Reachable configurations | On the `basicMul` side              |
-| ------------------ | -----------------------: | ----------------------------------- |
-| 64-bit             |                      319 | 5 (`n` = 20, 22, 24, 26, 28)        |
-| 32-bit (`GOARCH=386`) |                   476 | **0**                               |
+| Word size             | Reachable configurations | On the `basicMul` side |
+| --------------------- | -----------------------: | ---------------------- |
+| 64-bit, before        |                      319 | 5 (`n` = 20…28)        |
+| 64-bit, after         |                      327 | **0**                  |
+| 32-bit (`GOARCH=386`) |                      492 | **0**                  |
 
-On 64-bit those five occupy a single window, **131.2 kbit to 211.4 kbit per operand** — the
-bottom of the `k=9` bracket, immediately above where `fftThreshold` hands work to the FFT
-at all. Above 211.4 kbit the branch is never taken again, because every higher `k` bracket
-starts at `n ≥ 36`. On 32-bit the branch is unreachable through the public `Mul` entirely;
-it exists there only for direct `mulFFT` / `poly.Mul` callers, which is why
-`BenchmarkFermatMul` hard-codes a synthetic `n=16` case to keep that side covered on every
-platform.
+Before the `fftSizeThreshold` change, five configurations took the branch on 64-bit, in a
+single window from 131.2 to 211.4 kbit per operand — the bottom of the `k=9` bracket.
+Raising entry 8 moved exactly that window to `k=8`, where `n ≥ 31`. **The basicMul branch
+is now unreachable through the public `Mul` on both word sizes.** It survives only for
+direct `mulFFT` / `poly.Mul` callers, which is why `BenchmarkFermatMul` hard-codes a
+synthetic `n=16` case to keep that side covered everywhere.
 
-This is rule 5 of the measurement discipline applied before the fact rather than after:
-whatever the timings say, this constant can only move an 80 kbit-wide sliver of one word
-size.
+The timings say the same thing independently. `TestCalibrateFermatMul`, `n` = 8…96:
+
+```
+n=27  basicMul 374ns  bigint 369ns  ratio 0.987
+n=28  basicMul 405ns  bigint 399ns  ratio 0.985
+n=29  basicMul 443ns  bigint 439ns  ratio 0.991
+n=30  basicMul 477ns  bigint 476ns  ratio 0.998   <- incumbent cutoff
+n=33  basicMul 496ns  bigint 493ns  ratio 0.994
+n=36  basicMul 611ns  bigint 626ns  ratio 1.025
+```
+
+From `n=14` to `n=48` the ratio sits at 1.00 ± 3% with no crossover anywhere; the scattered
+1.18–1.25 readings are single lucky minima, not a trend. `basicMul` has a real edge only at
+`n` = 8–10 (~1.1–1.2x), and `big.Int.Mul` pulls ahead from about `n=60` (0.72–0.90 at
+`n` = 68…96). Schoolbook and Karatsuba-plus-assembly have simply converged over the range
+where the cutoff sits.
+
+**Left unchanged at 30**, doubly determined: there is no crossing to find near 30, and the
+branch has no reachable decision to make on the public path regardless.
+
+### `quadraticScanThreshold` — decimal scanning
+
+`TestCalibrateScan` sweeps twelve candidate thresholds (all multiples of 14, as `power(0)`
+requires) across seven input sizes, and value-checks every candidate against
+`big.Int.SetString` so a wrong threshold fails as a wrong answer rather than a fast one.
+
+First, the prior question — whether `FromDecimalString` is worth using at all. Speedup over
+`big.Int.SetString` at the incumbent threshold:
+
+| Digits | 1k   | 3k   | 10k  | 30k  | 100k | 300k | 1M    | 3M    |
+| ------ | ---- | ---- | ---- | ---- | ---- | ---- | ----- | ----- |
+| ×      | 0.93 | 0.87 | 1.18 | 1.94 | 3.18 | 7.15 | 15.82 | 30.61 |
+
+The crossover is near 5,000 digits and the win grows without bound after it. The two
+sub-crossover figures are a measurement artifact, not a regression: they compare against a
+`SetString` loop that reuses its destination, while `FromDecimalString` must allocate a
+fresh `*big.Int` to return. Like for like at 1,000 digits — `new(big.Int).SetString`
+4.343 µs against `FromDecimalString` 4.231 µs — it is 2.6% _faster_. Below the threshold it
+degenerates to `SetString` with no measurable penalty.
+
+Second, the threshold itself. The spread across candidates is **not noise**: the timings
+cluster into tight families of thresholds related by exact powers of two.
+
+```
+1,000,000 digits                    3,000,000 digits
+ 280  49.05    560  48.82            280  234ms   560  231ms
+1120  48.59   2240  49.13   family A 1120  235ms  2240  234ms
+4480  49.27                          4480  237ms
+---------------------------         ---------------------------
+ 840  59.77   1680  59.44   family B  840  204ms  1680  203ms
+3360  59.22   6720  60.22            3360  205ms  6720  206ms
+---------------------------         ---------------------------
+1400  53.07   2800  53.04   family C 1400  279ms  2800  279ms
+```
+
+Within a family the timings agree to within 1%; between families they differ by up to 22%
+— and the ranking **inverts** between the two input sizes (A best at 1M, B best at 3M).
+
+The cause is structural. `chunkSize` splits at `quadraticScanThreshold << (pow-1)`, so only
+`frac(log2(size/threshold))` affects the recursion tree, which is why thresholds a power of
+two apart are indistinguishable. When that fraction is near 0.8 the split is close to
+balanced (0.43 / 0.57) and the recursive `Mul` is cheapest; as it approaches 0 the split
+degenerates towards maximally unbalanced. Since the fraction depends on the _input_ size,
+no fixed threshold can be right for every input.
+
+**Left unchanged at 1232.** There is no crossover to fit — only a quantization artifact —
+and 1232 is at or near the best candidate in every column where the function is worth using
+at all (best at 30k and 300k digits, tied at 1M, within 6% of best at 100k). Picking the
+winner at 3M digits would be fitting one input size. The real fix is balanced splitting in
+`chunkSize`, worth roughly 20% and independent of this constant; it is listed as new work
+in [PLAN.md](PLAN.md).
 
 ## Benchmark inventory
 
 - `fft_test.go` — `BenchmarkMulBig_*` (math/big baseline), `BenchmarkMulFFT_*` (FFT
   forced), `BenchmarkMul_*` (threshold-dispatched, i.e. what users get), plus unbalanced
-  operand sizes.
+  operand sizes. `Mul_150kb` / `Mul_200kb` / `Mul_250kb` bracket the `fftSizeThreshold[8]`
+  boundary.
 - `fermat_bench_test.go` — micro-benchmarks for `Shift`, `ShiftHalf` (even and odd paths
-  separately), `Add`, `Sub`, `Mul` (both sides of the `n < 30` branch), `Transform`,
-  `InvTransform`, `polValues.Mul`. Sizes are derived at run time from the real
+  separately), `Add`, `Sub`, `Mul` (both sides of the `fermatBasicMulThreshold` branch),
+  `Transform`, `InvTransform`, `polValues.Mul`. Sizes are derived at run time from the real
   `fftSize`/`valueSize` path rather than hard-coded, so they remain correct on 32-bit.
 - `scan_test.go` — `BenchmarkScanFast*` / `BenchmarkScanBig*` for `FromDecimalString`.
+- `calibrate_test.go` — the `-calibrate`-gated sweeps: `TestCalibrateThreshold` and
+  `TestCalibrateFFT` (the original bisecting harnesses), plus `TestCalibrateFFTTable`,
+  `TestCalibrateFermatMul` and `TestCalibrateScan` (flat grids). The flat grids report
+  minima of three runs rather than means, and label every `fermat.Mul` row reachable or
+  informational so unreachable configurations cannot drive a constant.
+- `threshold_test.go` — always-on invariants, not gated behind `-calibrate`:
+  `TestFFTSizeThresholdMonotone` (a non-monotone table would silently select the wrong `k`)
+  and `TestFermatBasicMulThresholdReachable`, which enumerates every `(k, m, n)` the public
+  `Mul` can reach and reports which side of the cutoff each falls on. Both have been
+  verified to fail when the invariant is deliberately broken.
 
 `scripts/run_benchmarks.sh` captures a run; `scripts/bench_compare.sh` compares it against
 a committed baseline with a `benchstat` regression gate. Note that this gate is a plain
