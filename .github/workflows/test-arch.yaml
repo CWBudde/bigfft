@@ -69,14 +69,26 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: go build -v ./...
 
-      # go vet is what catches //go:linkname declarations that have drifted
-      # from math/big's per-architecture signatures, so it must stay green on
-      # every GOARCH, not just the host one.
+      - name: Build (purego)
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -tags purego -v ./...
+
+      # asmdecl checks frame sizes and every FP reference against the Go
+      # declarations, so vet must stay green on every assembly architecture,
+      # not just the host one.
       - name: Vet
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go vet ./...
+
+      - name: Vet (purego)
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go vet -tags purego ./...
 
       - name: Run tests (with race detector)
         if: matrix.race
@@ -91,3 +103,12 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go test -v -count=1 -timeout=30m ./...
+
+      # The fallback is a supported configuration, not dead code. Exercise it
+      # on every architecture; assembly remains enabled in the default run
+      # above so asmdecl can still validate frame sizes and FP references.
+      - name: Run tests (purego)
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go test -tags purego -v -count=1 -timeout=30m ./...

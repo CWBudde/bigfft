@@ -581,8 +581,7 @@ func butterflies(dst1, dst2 []fermat, lo, hi, ω2shift int, ft *fourierTemps) {
 	tmp, tmp2 := ft.tmp, ft.tmp2
 	for i := lo; i < hi; i++ {
 		tmp.ShiftHalf(dst2[i], i*ω2shift, tmp2) // ω^i * dst2[i]
-		dst2[i].Sub(dst1[i], tmp)
-		dst1[i].Add(dst1[i], tmp)
+		butterfly(dst1[i], dst2[i], dst1[i], tmp)
 	}
 }
 

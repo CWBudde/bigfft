@@ -9,6 +9,10 @@ build:
 test:
     go test -v -race -count=1 -timeout=20m ./...
 
+# Run the supported pure-Go fallback (no architecture assembly).
+test-purego:
+    go test -tags "purego" -v -count=1 -timeout=20m ./...
+
 # Run benchmarks
 bench:
     go test -bench=. -benchmem -run=^$ -timeout=60m ./...
@@ -76,13 +80,13 @@ calibrate-scan:
 calibrate-parallel:
     go test -run=XXX -bench=MulFFTParallelSweep -count=14 -timeout=120m
 
-# Vet on every supported word size / architecture. arith_decl.go's
-# //go:linkname pulls into math/big and the _W-dependent word arithmetic in
-# fermat.go are exactly what breaks on 32-bit, so 386 is not optional here.
+# Vet assembly declarations on every supported assembly architecture and keep
+# the _W-dependent pure-Go arithmetic honest on 386.
 vet-arch:
     GOARCH=amd64 go vet ./...
     GOARCH=386 go vet ./...
     GOARCH=arm64 go vet ./...
+    go vet -tags "purego" ./...
 
 # Apply every automatic fix (lint then format)
 fix:

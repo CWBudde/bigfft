@@ -7,16 +7,16 @@ tooling and pursues performance work the original explicitly left as a proof of 
 
 ## Status at a glance
 
-| Area                    | Progress                                            |
-| ----------------------- | --------------------------------------------------- |
-| Tooling and CI          | done                                                |
-| Benchmarks              | done                                                |
-| Parallelism             | done; separate parallel threshold measured, no room |
-| Allocation / arena      | done                                                |
-| Threshold recalibration | done: all four measured; one changed, three pinned  |
-| Decimal scanning        | done: balanced split, -4% serial / -8% parallel     |
-| Plan 9 assembly         | not started (headline item)                         |
-| Cache blocking and rest | not started                                         |
+| Area                    | Progress                                               |
+| ----------------------- | ------------------------------------------------------ |
+| Tooling and CI          | done                                                   |
+| Benchmarks              | done                                                   |
+| Parallelism             | done; separate parallel threshold measured, no room    |
+| Allocation / arena      | done                                                   |
+| Threshold recalibration | done: all four measured; one changed, three pinned     |
+| Decimal scanning        | done: balanced split, -4% serial / -8% parallel        |
+| Plan 9 assembly         | done; linknames gone, fused butterflies on amd64/arm64 |
+| Cache blocking and rest | not started                                            |
 
 ## Measurement discipline (read this before touching performance)
 
@@ -187,7 +187,42 @@ full of `_W`-dependent word arithmetic. `GOARCH=386` is verified to vet and test
   - `TestScanPowerTable` and `TestScanThresholds` are always-on guards, **verified to fail
     when the odd-length correction is removed**.
 
+- [x] **Owned Plan 9 arithmetic and fused butterflies.** The six unexported `math/big`
+      linknames are gone. `addVV`, `subVV`, `lshVU`, and `addMulVVW` are now local amd64
+      and arm64 Plan 9 assembly; `addVW`/`subVW` and every `purego` or other-architecture
+      build use owned Go implementations. This removes the repository's largest toolchain
+      compatibility hazard, including the renamed `shlVU` and `addMulVVW` shims.
+  - The fused butterfly computes the low-word sum and difference together. amd64 uses
+    two-word blocks with independent saved ADC/SBB chains; arm64 uses four-word
+    ADCS/SBCS blocks. Exact differential tests cover carries, borrows, aliases, odd lengths,
+    and guard words.
+  - The arithmetic kernels are 12-62% faster than their always-available Go oracles at
+    representative lengths. This is a fallback comparison, not an end-to-end claim: the
+    old build already reached `math/big` assembly through linkname.
+  - Interleaved end-to-end A/B, ten repetitions, single P-core: transform `n=27` is
+    **-6.0%** (p=0.002); transforms `n=64`/`n=80` and `MulFFT` at 1/5/10 Mb show no
+    measured difference (all p=0.53-0.97). Geomean -1.9%; allocations unchanged.
+  - `purego` is tested on every CI architecture, and default plus purego builds are vetted
+    per GOARCH so asmdecl checks every assembly declaration/frame pair.
+  - A complete arm64 shift-mod kernel and same-binary benchmark are present but deliberately
+    not dispatched until the native ARM machine is available. QEMU validates it bit-exactly
+    but cannot supply meaningful performance data.
+
 ## Tried and rejected
+
+### ~~amd64 shift-mod dispatch~~ — the hot aligned primitive did not move `MulFFT`
+
+Two amd64 shift kernels were measured. A faithful monolithic port was 40-80% slower than
+the existing composition of copy/subtract/`lshVU`. A specialized one-pass negacyclic word
+rotation did win on aligned positive shifts (about 27% at `n=80`) and was roughly flat on
+aligned negative shifts. That was the right path — 41-71% of production shifts are word
+aligned — but dispatching it at the `Shift` boundary made unaligned calls pay for selection,
+while dispatching only at the butterfly call site merely broke even.
+
+Ten interleaved repetitions against the fused-butterfly build: geomean -0.43%, every
+transform and `MulFFT_1Mb`/`5Mb`/`10Mb` comparison p=0.06-0.97. No measurable end-to-end
+gain, so the amd64 shift kernel and dispatch were removed. The owned `lshVU` kernel remains:
+it removes the linkname and is the faster building block on the mixed shift workload.
 
 ### ~~Fused odd-`k` `ShiftHalf`~~ — correct, faster, and pointless
 
@@ -268,37 +303,7 @@ look like a finding. It had never been measured.
 
 Roughly in expected-value order.
 
-### 1. Plan 9 assembly
-
-The headline long-term item, and the reason to care about it is not only speed:
-`arith_decl.go` pulls seven unexported symbols out of `math/big` via `//go:linkname`.
-Those have no compatibility guarantee, and Go has already renamed some of them
-(`shlVU` → `lshVU`, `addMulVVW` → `addMulVVWW`); they survive today only because the
-toolchain keeps compatibility shims for known linkname users. Owning the kernels removes
-the single largest fragility in this repository.
-
-Kernels, in order:
-
-- [ ] **Fused butterfly kernel** for amd64: `ShiftHalf` + `Add`/`Sub` in one pass with
-      ADC/SBB carry chains. The current butterfly makes three passes over an `n`-word
-      buffer through a `tmp` intermediate; one pass computing sum and difference together
-      should be a clear win, and unlike the pure-Go version it is not competing against
-      `math/big`'s hand-written assembly for the individual `addVV`/`subVV` steps. (A
-      pure-Go fusion was considered and dropped for exactly that reason: a hand-rolled Go
-      carry loop loses to two calls into assembly.)
-- [ ] **Shift-mod-2^n+1 kernel** (`fermat.Shift`), the single hottest primitive at 22%.
-- [ ] Then arm64.
-
-Plumbing required, modelled on the sibling `algo-fft` repository
-(`internal/asm/arch_*.go` and its `test-arch.yaml`):
-
-- [ ] A `purego` build tag with a pure-Go fallback, built **and tested** on every matrix
-      entry — the fallback is a supported configuration, not dead code.
-- [ ] `go vet` per GOARCH in CI (`asmdecl` checks assembly frame sizes and FP references
-      against the Go declarations; this is what catches decl↔asm drift).
-- [ ] Assembly-vs-Go differential tests, in the style of the `ShiftHalf` differential test.
-
-### 2. Smaller items
+### 1. Smaller items
 
 - [ ] **Cache-blocked / six-step transform** for sizes whose working set exceeds L2. At
       5 Mb the transform is memory-bound, which is also why fusing passes is the recurring

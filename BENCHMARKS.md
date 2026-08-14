@@ -108,6 +108,49 @@ check that earlier apparent wins on this project failed.
 Serial throughput costs about 1–2% at 5 Mb from the added indirection. Set
 `SetMaxParallelism(1)` to opt out entirely.
 
+## Plan 9 assembly
+
+The default amd64 and arm64 builds now own the word-vector primitives previously reached
+through six unsupported `math/big` linknames. `addVV`, `subVV`, `lshVU`, and `addMulVVW`
+are local Plan 9 assembly; `addVW` and `subVW` are local Go. `-tags purego` selects Go
+oracles for all six and is built, vetted, and tested on every CI architecture.
+
+Same-binary microbenchmarks against those Go oracles show why the assembly implementations
+are retained, independent of the compatibility win. At `n=80`, approximate medians:
+
+| Primitive   |      Go | Assembly | Change |
+| ----------- | ------: | -------: | -----: |
+| `addVV`     | 62.7 ns |  24.7 ns |   -61% |
+| `subVV`     | 61.9 ns |  24.6 ns |   -60% |
+| `lshVU`     | 43.7 ns |  25.4 ns |   -42% |
+| `addMulVVW` | 76.4 ns |  61.6 ns |   -19% |
+
+The old default already reached `math/big` assembly, so these are fallback comparisons,
+not the end-to-end A/B. The user-visible performance change comes from the fused butterfly,
+which computes sum and difference in one payload pass (two-word ADC/SBB blocks on amd64,
+four-word ADCS/SBCS blocks on arm64).
+
+Interleaved old/default A/B, ten repetitions, `taskset -c 0`, `GOMAXPROCS=1`:
+
+| Benchmark             |   Before |    After |      Change / p |
+| --------------------- | -------: | -------: | --------------: |
+| `Transform/n=27/k=8`  | 75.84 µs | 71.29 µs | -6.00%, p=0.002 |
+| `Transform/n=64/k=10` | 617.9 µs | 615.8 µs |      ~, p=0.971 |
+| `Transform/n=80/k=12` | 4.087 ms | 4.060 ms |      ~, p=0.971 |
+| `MulFFT_1Mb`          | 3.343 ms | 3.317 ms |      ~, p=0.853 |
+| `MulFFT_5Mb`          | 21.80 ms | 21.39 ms |      ~, p=0.684 |
+| `MulFFT_10Mb`         | 52.66 ms | 51.84 ms |      ~, p=0.529 |
+
+Geomean -1.88%; bytes and allocations are unchanged. The correct claim is therefore one
+small-transform win and no measured difference on the large public workloads, alongside
+removal of the linkname compatibility hazard.
+
+The attempted amd64 shift-mod dispatch was not retained. A specialized aligned kernel won
+its positive micro-path by about 27% at `n=80`, but the final call-site A/B was flat:
+geomean -0.43%, every transform and `MulFFT` comparison p=0.06-0.97. The complete arm64
+shift kernel remains differential-tested and has a same-binary benchmark ready for native
+hardware; QEMU timings are deliberately not reported.
+
 ## Allocations
 
 Introducing a per-`fftmul` scratch arena, `MulFFT_1Mb`:
