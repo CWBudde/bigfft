@@ -7,16 +7,16 @@ tooling and pursues performance work the original explicitly left as a proof of 
 
 ## Status at a glance
 
-| Area                    | Progress                                           |
-| ----------------------- | -------------------------------------------------- |
-| Tooling and CI          | done                                               |
-| Benchmarks              | done                                               |
-| Parallelism             | done                                               |
-| Allocation / arena      | done                                               |
-| Threshold recalibration | done: all four measured; one changed, three pinned |
-| Decimal scanning        | done: balanced split, -4% serial / -8% parallel    |
-| Plan 9 assembly         | not started (headline item)                        |
-| Cache blocking and rest | not started                                        |
+| Area                    | Progress                                            |
+| ----------------------- | --------------------------------------------------- |
+| Tooling and CI          | done                                                |
+| Benchmarks              | done                                                |
+| Parallelism             | done; separate parallel threshold measured, no room |
+| Allocation / arena      | done                                                |
+| Threshold recalibration | done: all four measured; one changed, three pinned  |
+| Decimal scanning        | done: balanced split, -4% serial / -8% parallel     |
+| Plan 9 assembly         | not started (headline item)                         |
+| Cache blocking and rest | not started                                         |
 
 ## Measurement discipline (read this before touching performance)
 
@@ -216,23 +216,59 @@ The general lesson is rule 5 above: this was proposed on a plausible reading of 
 profile (`fermat.Shift` at 22%) without checking which _path_ through `Shift` that 22%
 represented. It was the even path.
 
+### ~~A separate threshold for the parallel path~~ — the crossover barely moves
+
+The idea, carried at the top of the to-do list since the parallel path landed: `fftThreshold`
+was calibrated with parallelism disabled, so with four cores the FFT should start beating
+`math/big` well below 1800 words, and a second lower threshold selected when parallelism is
+active would pick up the band between the two crossovers.
+
+The band is essentially empty. `BenchmarkMulDispatchCrossover` times Karatsuba against both
+FFT modes across the region, 30 interleaved repetitions:
+
+```
+operand    big vs serial FFT    big vs parallel FFT
+ 90 kbit        +3.64%                 +7.38%
+105 kbit        +7.89%                 +8.28%
+115 kbit        +8.46%              ~  (p=0.051)
+120 kbit        -2.99%                 -8.29%
+150 kbit       -15.05%                -26.01%
+```
+
+The parallel FFT breaks even at **115 kbit**; `fftThreshold = 1800` words is **115.2 kbit**.
+Four cores move the dispatch crossover by about 3 kbit — some 60 words, under 3% — not the
+substantial shift the item assumed. There is no range to pick up, and a second threshold
+would add a mode to the dispatch logic in exchange for nothing.
+
+Two things came out of the measurement that were worth having anyway:
+
+- The transform-array sizes documented for `parallelWordThreshold` were **stale**. They
+  predated `fftSizeThreshold[8]` going from `1<<18` to `1<<19`, which moved 150 kbit
+  operands from `k=9` to `k=8` and from 11776 to 10240 words. The re-measurement also
+  overturned one of its data points: 100 kbit was recorded as `p=0.70`, "no difference", and
+  is actually −2.05% at 30 repetitions. The crossover is between 5632 and 7168 words, not
+  between 7168 and 11776.
+- `parallelWordThreshold` was nonetheless **left at 8192**, because 8192 words of transform
+  array is 1792 words per operand against an `fftThreshold` of 1800. Everything a lower gate
+  would admit lies below the point where `Mul` enters the FFT, so lowering it would change
+  nothing reachable through the public API.
+
+`TestParallelDispatchOverlap` now records the relationship between the two gates
+mechanically and will say so if a future table change opens a band that today is eight words
+wide. The measurements are **provisional**: taken at load average 2.3–3.6 rather than idle,
+at the user's direction, with dispersion of ±0–2%, every p at 0.000, and monotone curves. A
+confirming run on a quiet machine is still owed, and they are marked as such in
+BENCHMARKS.md.
+
+The lesson is a variant of rule 5: the premise had been sitting in BENCHMARKS.md as a plain
+assertion ("with parallelism enabled the FFT wins earlier than 1800 words") long enough to
+look like a finding. It had never been measured.
+
 ## To do
 
 Roughly in expected-value order.
 
-### 1. A separate threshold for the parallel path
-
-- [ ] Measure the FFT/basic crossover with parallelism **disabled** (known: ~1800 words).
-- [ ] Measure the crossover with parallelism **enabled** — the FFT starts winning below
-      1800 words, so the default dispatch switches later than it should.
-- [ ] Add a second, lower threshold selected when parallelism is active, picking up the
-      range between the two crossovers.
-
-`fftThreshold` was calibrated with parallelism disabled, deliberately, so that it stays
-correct for callers using `SetMaxParallelism(1)`. Measure both crossovers under the
-protocol above before choosing numbers.
-
-### 2. Plan 9 assembly
+### 1. Plan 9 assembly
 
 The headline long-term item, and the reason to care about it is not only speed:
 `arith_decl.go` pulls seven unexported symbols out of `math/big` via `//go:linkname`.
@@ -262,7 +298,7 @@ Plumbing required, modelled on the sibling `algo-fft` repository
       against the Go declarations; this is what catches decl↔asm drift).
 - [ ] Assembly-vs-Go differential tests, in the style of the `ShiftHalf` differential test.
 
-### 3. Smaller items
+### 2. Smaller items
 
 - [ ] **Cache-blocked / six-step transform** for sizes whose working set exceeds L2. At
       5 Mb the transform is memory-bound, which is also why fusing passes is the recurring

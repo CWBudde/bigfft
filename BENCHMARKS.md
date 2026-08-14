@@ -201,6 +201,10 @@ improved substantially since:
 | `fermatBasicMulThreshold` | `fermat.go` | schoolbook vs `big.Int.Mul` for coefficients |
 | `quadraticScanThreshold`  | `scan.go`   | `SetString` vs recursive decimal scanning    |
 
+A fifth, `parallelWordThreshold` (`parallel.go`), decides serial vs parallel transforms. It
+is not a 2012 constant and is measured by benchmark rather than by a `-calibrate` sweep, but
+it is recorded in the same section below because it interacts with `fftThreshold`.
+
 `just calibrate` runs all four sweeps; `just calibrate-fft`, `just calibrate-fermat` and
 `just calibrate-scan` run them individually. Run serially and pinned
 (`taskset -c 0`, `GOMAXPROCS=1`) on an otherwise idle machine, so the resulting constants
@@ -232,9 +236,13 @@ transition. The existing `fftThreshold = 1800` words (115.2 kbit) sits at the lo
 that band, so **the constant was left unchanged**: the 2012 value is still approximately
 right on modern hardware, and picking a new number from this data would be fitting noise.
 
-One consequence worth knowing: with parallelism enabled the FFT wins earlier than 1800
-words, so the default dispatch switches slightly later than optimal. A separate, lower
-threshold for the parallel case is listed as future work in [PLAN.md](PLAN.md).
+This entry used to claim that with parallelism enabled the FFT wins earlier than 1800
+words, and that a separate lower threshold for the parallel case was therefore worth
+having. **That was wrong**, and the correction is in
+[§ `parallelWordThreshold`](#parallelwordthreshold--serial-vs-parallel-transforms) below:
+parallelism does not engage at all until a transform array reaches 8192 words, which
+operands only do at 1792 words each — eight words below `fftThreshold` itself. There is no
+band to pick up.
 
 ### `fftSizeThreshold` — the FFT length for a given size
 
@@ -387,6 +395,72 @@ independent of this constant — see § Balanced splitting in decimal scanning a
 supersedes the split behaviour described here. The threshold itself was re-checked after
 that rewrite and remains at 1232.
 
+### `parallelWordThreshold` — serial vs parallel transforms
+
+A fifth constant, added with the parallel path rather than inherited from 2012, and
+measured differently from the four above: `just calibrate-parallel` runs
+`BenchmarkMulFFTParallelSweep`, which times both modes in one binary with the gate under
+measurement disabled on the parallel side, pinned to four P-cores
+(`taskset -c 0-3`, `GOMAXPROCS=4`) rather than to one.
+
+> **Provisional.** Both tables below were taken with the machine under a load average of
+> 2.3–3.6 (browser, editor, desktop session), not idle, at the user's direction. Dispersion
+> came out at ±0–2% with every p at 0.000, and the curves are monotone, so the shape is not
+> in doubt — but rule 2 of PLAN.md § Measurement discipline is not satisfied and a
+> confirming run on a quiet machine is still owed.
+
+First, the gate's own crossover — parallel vs serial transforms, 30 interleaved
+repetitions:
+
+| operand  | transform array | parallel vs serial |
+| -------- | --------------: | -----------------: |
+| 50 kbit  |          4096 w |  **+9.13%** slower |
+| 75 kbit  |          5632 w |  **+3.14%** slower |
+| 100 kbit |          7168 w |  **−2.05%** faster |
+| 125 kbit |          8704 w |             −5.59% |
+| 150 kbit |         10240 w |            −12.03% |
+| 200 kbit |         13312 w |            −16.05% |
+
+Two corrections to what this file and `parallel.go` previously recorded. The transform-array
+sizes for 150 and 200 kbit were **stale**: they were measured before `fftSizeThreshold[8]`
+went from `1<<18` to `1<<19`, which moved 150 kbit operands from `k=9` to `k=8` and with them
+from 11776 to 10240 words. And the original run put 100 kbit at `p=0.70`, "no difference";
+with 30 repetitions it is a small but unambiguous **−2.05%**. The crossover is therefore
+between 5632 and 7168 words, not between 7168 and 11776.
+
+That would argue for lowering the gate from 8192 to 7168 — except that it would change
+nothing anyone can observe. A transform array of 8192 words corresponds to 1792 words per
+operand, and `fftThreshold` is 1800: the entire band the change would unlock lies _below_
+the threshold at which `Mul` enters the FFT at all, and is reachable only by calling
+`mulFFT` directly. **Left unchanged at 8192**, which the second table shows is where it
+belongs anyway.
+
+Second, the comparison that decides whether the band is worth unlocking — `math/big`
+Karatsuba against both FFT modes, from `BenchmarkMulDispatchCrossover`, 30 repetitions:
+
+| operand      | `big`   | serial FFT |    parallel FFT |
+| ------------ | ------- | ---------: | --------------: |
+| 90 kbit      | 262.8µs |     +3.64% |          +7.38% |
+| 100 kbit     | 254.1µs |    +26.11% |         +26.47% |
+| 105 kbit     | 296.3µs |     +7.89% |          +8.28% |
+| 110 kbit     | 322.4µs |     +6.45% |          +3.66% |
+| **115 kbit** | 349.7µs |     +8.46% | **~ (p=0.051)** |
+| 120 kbit     | 388.8µs |     −2.99% |          −8.29% |
+| 130 kbit     | 387.3µs |     −1.48% |          −6.11% |
+| 150 kbit     | 581.2µs |    −15.05% |         −26.01% |
+
+**The parallel FFT breaks even against Karatsuba at 115 kbit, and `fftThreshold = 1800`
+words is 115.2 kbit.** Parallelism moves the dispatch crossover by roughly 3 kbit — about
+60 words, under 3% — where PLAN.md item 1 assumed it moved it enough to be worth a second
+threshold. It does not. The item is closed; see PLAN.md § Tried and rejected.
+
+Two reading notes. The `big` column is not monotone: 100 kbit (254.1µs) beats 90 kbit
+(262.8µs), because Karatsuba has size steps of its own, so the +26% in that row is a
+Karatsuba sweet spot rather than an FFT weakness — which is why the crossover has to be read
+off the trend and not off any single row. And the `big` column's dispersion (±2–8%) is
+several times the FFT columns' (±0–2%), the load showing up where the code is least
+regular.
+
 ## Benchmark inventory
 
 - `fft_test.go` — `BenchmarkMulBig_*` (math/big baseline), `BenchmarkMulFFT_*` (FFT
@@ -413,8 +487,16 @@ that rewrite and remains at 1232.
 - `threshold_test.go` — always-on invariants, not gated behind `-calibrate`:
   `TestFFTSizeThresholdMonotone` (a non-monotone table would silently select the wrong `k`)
   and `TestFermatBasicMulThresholdReachable`, which enumerates every `(k, m, n)` the public
-  `Mul` can reach and reports which side of the cutoff each falls on. Both have been
-  verified to fail when the invariant is deliberately broken.
+  `Mul` can reach and reports which side of the cutoff each falls on, and
+  `TestParallelDispatchOverlap`, which finds the exact operand size at which parallelism
+  engages and compares it against `fftThreshold`. All three have been verified to fail when
+  the invariant is deliberately broken.
+- `fft_parallel_test.go` — `BenchmarkMulFFTParallelSweep` (serial vs parallel transforms at
+  each size, both modes in one binary, gate disabled on the parallel side) and
+  `BenchmarkMulDispatchCrossover` (`math/big` against both FFT modes across `fftThreshold`).
+  The first calibrates `parallelWordThreshold`; only the second can answer whether `Mul`
+  should have chosen the FFT at all. Run both pinned to four P-cores, not one, and pivot
+  with `benchstat -col /mode`.
 
 `scripts/run_benchmarks.sh` captures a run; `scripts/bench_compare.sh` compares it against
 a committed baseline with a `benchstat` regression gate. Note that this gate is a plain

@@ -165,3 +165,57 @@ func TestFermatBasicMulThresholdReachable(t *testing.T) {
 			"here.", _W)
 	}
 }
+
+// TestParallelDispatchOverlap records where the two dispatch gates sit relative
+// to each other, mechanically, so the relationship cannot drift unnoticed.
+//
+// Mul sends operands to the FFT above fftThreshold words, and fftmul runs the
+// transform in parallel once one transform array reaches parallelWordThreshold
+// words. If parallelism started paying at a smaller operand size than
+// fftThreshold admits, there would be a band where a parallel FFT beats
+// Karatsuba but Mul never selects it. Capturing that band with a second, lower
+// threshold for the parallel path was a to-do item until it was measured: the
+// band is eight words wide, and a parallel FFT does not overtake math/big until
+// 115 kbit, which is fftThreshold itself. See PLAN.md § Tried and rejected.
+//
+// This test exists so that a future change to fftSizeThreshold or fftThreshold
+// cannot silently reopen that band without saying so.
+func TestParallelDispatchOverlap(t *testing.T) {
+	// One allocation, re-sliced, so the scan can step by a single word: the
+	// answer is a specific boundary and a geometric scan would step over it.
+	const maxWords = 1 << 20
+	buf := make(nat, maxWords)
+	first := 0
+	for w := 1; w <= maxWords; w++ {
+		x := buf[:w]
+		k, m := fftSize(x, x)
+		if arr := (valueSize(k, m, 2) + 1) << k; arr >= parallelWordThreshold {
+			first = w
+			break
+		}
+	}
+	if first == 0 {
+		t.Fatalf("parallelWordThreshold = %d is never reached below 2^20 words per "+
+			"operand; the parallel path is dead through the public Mul",
+			parallelWordThreshold)
+	}
+
+	t.Logf("fftThreshold = %d words/operand (%s bits); parallelism engages at %d "+
+		"words/operand (%s bits)", fftThreshold, siBits(int64(fftThreshold)*int64(_W)),
+		first, siBits(int64(first)*int64(_W)))
+
+	switch {
+	case first > fftThreshold:
+		t.Logf("NOTE: %d words of the FFT range run serially. Sizes in "+
+			"[%d, %d) words take the FFT without parallelism.",
+			first-fftThreshold, fftThreshold, first)
+	case first < fftThreshold:
+		t.Logf("NOTE: parallelism now engages %d words BELOW fftThreshold. "+
+			"Operands in [%d, %d) words would run a parallel FFT, but Mul sends "+
+			"them to Karatsuba instead. PLAN.md item 1 (a separate threshold for "+
+			"the parallel path) has room again; re-measure the crossover.",
+			fftThreshold-first, first, fftThreshold)
+	default:
+		t.Logf("the two gates coincide exactly; PLAN.md item 1 has no room")
+	}
+}

@@ -320,17 +320,34 @@ func bitsEqual(a, b []big.Word) bool {
 	return true
 }
 
+// Benchmark mode names. They appear in subtest names in benchstat's key=value
+// form, so that `benchstat -col /mode` pivots the modes into columns.
+const (
+	modeBig = "big" // math/big, i.e. what Mul does below fftThreshold
+	modeSeq = "seq" // mulFFT with parallelism off
+	modePar = "par" // mulFFT with parallelism on and the gate disabled
+)
+
 // benchmarkParallelSizes are operand bit sizes straddling the region where
-// parallelism starts to pay off.
-var benchmarkParallelSizes = []int{5e4, 1e5, 1.5e5, 2e5, 5e5, 1e6, 2e6, 5e6, 10e6}
+// parallelism starts to pay off. The three points between 50 and 150 kbit
+// resolve the gap the first calibration left open.
+var benchmarkParallelSizes = []int{5e4, 7.5e4, 1e5, 1.25e5, 1.5e5, 2e5, 5e5, 1e6, 2e6, 5e6, 10e6}
 
 // BenchmarkMulFFTParallelSweep measures the serial and the parallel path at
 // each size, in one binary, so the two are directly comparable. It is how
 // parallelWordThreshold was chosen: the crossover is the smallest size at
 // which the "par" variant is reliably faster than the "seq" one.
+//
+// The "par" mode drops parallelWordThreshold to zero, so it really is parallel
+// at every size — otherwise the gate under measurement would silence the very
+// points that decide where it belongs.
 func BenchmarkMulFFTParallelSweep(b *testing.B) {
 	old := int(maxParallelism.Load())
-	b.Cleanup(func() { maxParallelism.Store(int64(old)) })
+	oldThr := parallelWordThreshold
+	b.Cleanup(func() {
+		maxParallelism.Store(int64(old))
+		parallelWordThreshold = oldThr
+	})
 
 	for _, bits := range benchmarkParallelSizes {
 		x := natToInt(rndNat(bits / _W))
@@ -338,15 +355,59 @@ func BenchmarkMulFFTParallelSweep(b *testing.B) {
 		for _, mode := range []struct {
 			name    string
 			workers int
-		}{{"seq", 1}, {"par", 0}} {
+		}{{modeSeq, 1}, {modePar, 0}} {
 			// The name is in benchstat's key=value form so that the two
 			// modes can be pivoted into columns: benchstat -col /mode.
 			b.Run(fmt.Sprintf("size=%dkb/mode=%s", bits/1000, mode.name), func(b *testing.B) {
 				SetMaxParallelism(mode.workers)
+				if mode.workers == 1 {
+					parallelWordThreshold = oldThr
+				} else {
+					parallelWordThreshold = 0
+				}
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
 					_ = mulFFT(x, y)
 				}
+			})
+		}
+	}
+}
+
+// benchmarkDispatchSizes bracket fftThreshold (1800 words, 115.2 kbit) on both
+// sides, densely enough to see where a parallel FFT overtakes math/big.
+var benchmarkDispatchSizes = []int{90e3, 100e3, 105e3, 110e3, 115e3, 120e3, 130e3, 150e3}
+
+// BenchmarkMulDispatchCrossover compares what Mul currently does below
+// fftThreshold (math/big Karatsuba) against what it could do (a parallel FFT),
+// with the serial FFT as the reference the 2012 threshold was chosen against.
+//
+// BenchmarkMulFFTParallelSweep answers "is the parallel transform faster than
+// the serial one"; it cannot answer "should Mul have used the FFT at all". Only
+// the "big" column here can, and it is the column PLAN.md item 1 turns on.
+func BenchmarkMulDispatchCrossover(b *testing.B) {
+	old := int(maxParallelism.Load())
+	oldThr := parallelWordThreshold
+	b.Cleanup(func() {
+		maxParallelism.Store(int64(old))
+		parallelWordThreshold = oldThr
+	})
+
+	for _, bits := range benchmarkDispatchSizes {
+		for _, mode := range []string{modeBig, modeSeq, modePar} {
+			b.Run(fmt.Sprintf("size=%dkb/mode=%s", bits/1000, mode), func(b *testing.B) {
+				switch mode {
+				case modeBig:
+					benchmarkMulBig(b, bits, bits)
+					return
+				case modeSeq:
+					SetMaxParallelism(1)
+					parallelWordThreshold = oldThr
+				case modePar:
+					SetMaxParallelism(0)
+					parallelWordThreshold = 0
+				}
+				benchmarkMulFFT(b, bits, bits)
 			})
 		}
 	}

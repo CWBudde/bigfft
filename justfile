@@ -68,6 +68,14 @@ calibrate-fermat:
 calibrate-scan:
     go test -v -run=TestCalibrateScan -timeout=120m -calibrate
 
+# The serial/parallel crossover (parallelWordThreshold). Unlike the four above
+# this is a benchmark, not a -calibrate test: BenchmarkMulFFTParallelSweep runs
+# both modes in one binary, with the gate under measurement disabled on the
+# parallel side. Pin it differently too — `taskset -c 0-3` with GOMAXPROCS=4,
+# not the single core the others use — and pivot with `benchstat -col /mode`.
+calibrate-parallel:
+    go test -run=XXX -bench=MulFFTParallelSweep -count=14 -timeout=120m
+
 # Vet on every supported word size / architecture. arith_decl.go's
 # //go:linkname pulls into math/big and the _W-dependent word arithmetic in
 # fermat.go are exactly what breaks on 32-bit, so 386 is not optional here.
