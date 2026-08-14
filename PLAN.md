@@ -16,6 +16,7 @@ tooling and pursues performance work the original explicitly left as a proof of 
 | Threshold recalibration | done: all four measured; one changed, three pinned       |
 | Decimal scanning        | done: balanced split, -4% serial / -8% parallel          |
 | Plan 9 assembly         | done; linknames gone, fused Add/Sub tails on amd64/arm64 |
+| Coefficient planning    | done for measured amd64 k=12 plateaus, up to -19%        |
 | Cache blocking and rest | not started                                              |
 
 ## Measurement discipline (read this before touching performance)
@@ -188,11 +189,11 @@ arithmetic kernels have architecture-specific assembly and `fermat.go` is full o
     when the odd-length correction is removed**.
 
 - [x] **Owned Plan 9 arithmetic and fused Add/Sub butterfly tails.** The six unexported
-      `math/big`
-      linknames are gone. `addVV`, `subVV`, `lshVU`, and `addMulVVW` are now local amd64
-      and arm64 Plan 9 assembly; `addVW`/`subVW` and every `purego` or other-architecture
-      build use owned Go implementations. This removes the repository's largest toolchain
-      compatibility hazard, including the renamed `shlVU` and `addMulVVW` shims.
+      `math/big` linknames are gone. `addVV`, `subVV`, `lshVU`, and `addMulVVW` are now
+      local amd64 and arm64 Plan 9 assembly; `addVW`/`subVW` and every `purego` or
+      other-architecture build use owned Go implementations. This removes the repository's
+      largest toolchain compatibility hazard, including the renamed `shlVU` and
+      `addMulVVW` shims.
   - After `ShiftHalf` produces the twiddle product in `tmp`, the fused butterfly tail
     computes the low-word sum and difference together. amd64 uses two-word blocks with
     independent saved ADC/SBB chains; arm64 uses four-word ADCS/SBCS blocks. Exact
@@ -208,6 +209,20 @@ arithmetic kernels have architecture-specific assembly and `fermat.go` is full o
   - A complete arm64 shift-mod kernel and same-binary benchmark are present but deliberately
     not dispatched until the native ARM machine is available. QEMU validates it bit-exactly
     but cannot supply meaningful performance data.
+
+- [x] **Plateau-aware FFT planning on amd64.** `valueSize` padding makes an incumbent
+      `k=12` plan abruptly expensive at repeatable coefficient boundaries. A forced-plan
+      grid measured the incumbent and valid `k±1` plans through the full multiplication
+      path, then a separate-binary public `Mul` A/B validated the production selector.
+  - The selector recomputes both `m` and `n` for `k+1` and uses it only when its coefficient
+    length is less than 4/7 of the incumbent. This admits the measured winning windows and
+    rejects the neighboring padding steps, where `k+1` is 17-55% slower.
+  - Serial wins are -5.2% to -19.3% (p=0.000-0.009); four-P-core wins are -5.9% to -18.1%
+    at the stable points. Boundary controls are flat. Selected plans use 2-11% more bytes
+    per operation; allocation counts are effectively flat.
+  - The policy is enabled only for default amd64 builds because that is the implementation
+    measured. `purego` and other architectures keep the threshold-table incumbent until
+    their own results justify enabling it.
 
 ## Tried and rejected
 
@@ -313,19 +328,6 @@ Roughly in expected-value order.
       `big.Int.Mul`, once the values are large enough for that to pay.
 - [ ] **`sync.Pool` for arenas**, now that a per-call arena exists. Worth it only if a
       workload does many multiplies; measure before adding global state.
-- [ ] **Coefficient packing waste in `valueSize`** — the largest unclaimed win on this
-      list, and it applies to every caller of `Mul`, not to one code path.
-      `valueSize` rounds a coefficient up to a multiple of `1 << (k-2)` bits, so `Mul` cost
-      is a step function of operand size with plateaus up to 25% wide. Measured at k=12:
-      `m` from 56 to 62 all cost 33–37 ms at `n=128`, and `m=64` jumps to 43 ms at `n=144`
-      — **30% more time for 3% more data**. An operand that lands just past a boundary pays
-      for a whole extra step. Directions worth trying: pick `k` by modelled cost rather
-      than by a size table (the table cannot see where inside a plateau a size falls), or
-      relax the `1 << (k-2)` rounding, whose `extra=2` slack may be more than correctness
-      needs. Note that the measured penalty is far larger than the ratio of `n` values, so
-      whatever model is used must be fitted against measurements, not derived from `n`
-      alone — a tree-cost model built on `n` under-predicted this by more than 10x. See
-      BENCHMARKS.md § Balanced splitting.
 - [ ] **Reuse scan temporaries** — `scan.go` carries a `// FIXME: reuse temporaries.` and
       allocates a fresh `big.Int` per recursion level. `FromDecimalString` also builds a
       fresh power table per call, which is now sized for the specific input and so cannot

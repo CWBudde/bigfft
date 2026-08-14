@@ -94,10 +94,10 @@ func arenaRandNat(rng *rand.Rand, n int) nat {
 // fills it with garbage once the result has been built. If the returned
 // nat aliased the arena in any way the comparison in the caller would fail.
 func fftmulScribble(x, y nat) (nat, *fftScratch, bool) {
-	k, m := fftSize(x, y)
-	xp := polyFromNat(x, k, m)
-	yp := polyFromNat(y, k, m)
-	s := newFFTScratch(k, valueSize(k, m, 2))
+	plan := selectFFTPlan(x, y)
+	xp := polyFromNat(x, plan.k, plan.m)
+	yp := polyFromNat(y, plan.k, plan.m)
+	s := newFFTScratch(plan.k, plan.n)
 	rp := xp.mul(&yp, s)
 	// The reconstructed polynomial is expected to live inside the arena;
 	// that is what makes the scribbling below a meaningful check.
@@ -147,7 +147,7 @@ func overlaps(a, b []big.Word) bool {
 // the whole arena after the fact and re-checking the product, and by
 // comparing the backing address ranges.
 func TestArenaResultDoesNotAlias(t *testing.T) {
-	sizes := []int{2000, 20000}
+	sizes := []int{2000, 20000, 112640}
 	if testing.Short() {
 		sizes = []int{2000}
 	}

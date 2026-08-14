@@ -9,18 +9,18 @@ import (
 )
 
 // parSizes are operand sizes chosen to land on a particular FFT size.
-// fftSize picks k from the total bit length of the product, so the sizes are
-// given in bits and converted to words at run time: expressing them directly
-// in words would select a different k on 32-bit platforms, where the same
-// word count is half the bits.
+// The production planner starts from the total bit length of the product, so
+// the sizes are given in bits and converted to words at run time: expressing
+// them directly in words would select a different k on 32-bit platforms,
+// where the same word count is half the bits.
 //
 //	1.28 Mbit per operand -> 2.44 Mbit product -> k=10
 //	2.56 Mbit per operand -> 4.88 Mbit product -> k=11
 //	4.48 Mbit per operand -> 8.54 Mbit product -> k=12
 //
-// The table is checked against fftSize in TestParallelCoversLargeK rather
-// than trusted, so a change to fftSizeThreshold cannot silently turn these
-// tests into small-k tests.
+// The table is checked against selectFFTPlan in TestParallelCoversLargeK
+// rather than trusted, so a planner change cannot silently turn these tests
+// into small-k tests.
 type parSize struct {
 	bits int
 	k    uint
@@ -55,14 +55,13 @@ func TestParallelCoversLargeK(t *testing.T) {
 	}
 	for _, ps := range parSizes {
 		x, y := make(nat, ps.words()), make(nat, ps.words())
-		k, m := fftSize(x, y)
-		if k != ps.k {
-			t.Errorf("%d words: fftSize gave k=%d, want %d", ps.words(), k, ps.k)
+		plan := selectFFTPlan(x, y)
+		if plan.k != ps.k {
+			t.Errorf("%d words: planner gave k=%d, want %d", ps.words(), plan.k, ps.k)
 		}
-		n := valueSize(k, m, 2)
-		if w := parallelWorkers(k, n); w < 2 {
+		if w := parallelWorkers(plan.k, plan.n); w < 2 {
 			t.Errorf("%d words (k=%d, n=%d): parallelWorkers=%d, the parallel "+
-				"path is not being exercised", ps.words(), k, n, w)
+				"path is not being exercised", ps.words(), plan.k, plan.n, w)
 		}
 	}
 }

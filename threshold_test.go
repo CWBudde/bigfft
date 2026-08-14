@@ -70,10 +70,10 @@ func siBits(b int64) string {
 // fftThreshold up to 1 Gbit.
 //
 // This is the mechanical version of a fact that is otherwise easy to get wrong:
-// n is not a free parameter. fftSize picks k from fftSizeThreshold, k and the
-// word count give m, and valueSize(k, m, 2) gives n — exactly as poly.Mul does
-// it. So the set of n values that fermat.Mul ever sees is a function of the
-// fftSizeThreshold table, and it re-derives itself if that table changes.
+// n is not a free parameter. The planner starts from fftSizeThreshold and may
+// choose a measured adjacent k; that k and the word count give m, and
+// valueSize(k, m, 2) gives n. So the set of n values that fermat.Mul ever sees
+// re-derives itself if either the threshold table or planner policy changes.
 //
 // Only balanced operands are swept. Mul dispatches to math/big unless *both*
 // operands exceed fftThreshold words (fft.go), so unbalanced pairs reach a
@@ -83,7 +83,7 @@ func reachableFermatSizes(maxBits int64) []fermatSize {
 	byConfig := make(map[[3]int]*fermatSize)
 	var order [][3]int
 
-	// fftSize only reads len(x) and len(y), so one buffer sliced to length
+	// selectFFTPlan only reads len(x) and len(y), so one buffer sliced to length
 	// serves the whole sweep. Allocating a fresh nat per point would mean
 	// hundreds of multi-megabyte allocations for no benefit.
 	buf := make(nat, maxBits/int64(_W)+1)
@@ -95,14 +95,15 @@ func reachableFermatSizes(maxBits int64) []fermatSize {
 		if w <= fftThreshold {
 			continue
 		}
-		k, m := fftSize(buf[:w], buf[:w])
-		n := valueSize(k, m, 2)
-		key := [3]int{int(k), m, n}
+		plan := selectFFTPlan(buf[:w], buf[:w])
+		key := [3]int{int(plan.k), plan.m, plan.n}
 		if f, ok := byConfig[key]; ok {
 			f.maxBits = bits
 			continue
 		}
-		byConfig[key] = &fermatSize{k: k, m: m, n: n, minBits: bits, maxBits: bits}
+		byConfig[key] = &fermatSize{
+			k: plan.k, m: plan.m, n: plan.n, minBits: bits, maxBits: bits,
+		}
 		order = append(order, key)
 	}
 
@@ -188,8 +189,8 @@ func TestParallelDispatchOverlap(t *testing.T) {
 	first := 0
 	for w := 1; w <= maxWords; w++ {
 		x := buf[:w]
-		k, m := fftSize(x, x)
-		if arr := (valueSize(k, m, 2) + 1) << k; arr >= parallelWordThreshold {
+		plan := selectFFTPlan(x, x)
+		if arr := (plan.n + 1) << plan.k; arr >= parallelWordThreshold {
 			first = w
 			break
 		}

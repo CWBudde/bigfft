@@ -12,6 +12,8 @@ import (
 
 const _W = int(unsafe.Sizeof(big.Word(0)) * 8)
 
+const maxInt64Value = int64(^uint64(0) >> 1)
+
 type nat []big.Word
 
 func (n nat) String() string {
@@ -54,13 +56,13 @@ func mulFFT(x, y *big.Int) *big.Int {
 // N = x.Bitlen() + y.Bitlen().
 
 func fftmul(x, y nat) nat {
-	k, m := fftSize(x, y)
-	xp := polyFromNat(x, k, m)
-	yp := polyFromNat(y, k, m)
+	plan := selectFFTPlan(x, y)
+	xp := polyFromNat(x, plan.k, plan.m)
+	yp := polyFromNat(y, plan.k, plan.m)
 	// A single scratch arena is allocated here and threaded through every
 	// stage of the transform. It dies when fftmul returns: the nat produced
 	// by Int() is freshly allocated and does not alias it (see poly.Int).
-	s := newFFTScratch(k, valueSize(k, m, 2))
+	s := newFFTScratch(plan.k, plan.n)
 	rp := xp.mul(&yp, s)
 	return rp.Int()
 }
@@ -206,8 +208,17 @@ var fftSizeThreshold = [...]int64{
 // such that m << k is larger than the number of words
 // in x*y.
 func fftSize(x, y nat) (k uint, m int) {
-	words := len(x) + len(y)
-	bits := int64(words) * int64(_W)
+	return fftSizeWords(natWordCount(x, y))
+}
+
+func fftSizeWords(words int) (k uint, m int) {
+	if words < 0 {
+		panic("bigfft: negative input length")
+	}
+	bits := maxInt64Value
+	if uint64(words) <= uint64(maxInt64Value/int64(_W)) {
+		bits = int64(words) * int64(_W)
+	}
 	k = uint(len(fftSizeThreshold))
 	for i := range fftSizeThreshold {
 		if fftSizeThreshold[i] > bits {
@@ -219,6 +230,65 @@ func fftSize(x, y nat) (k uint, m int) {
 	// 2^N-1 is larger than x*y. That is, m<<k > words
 	m = words>>k + 1
 	return
+}
+
+type fftPlan struct {
+	k    uint
+	m, n int
+}
+
+func makeFFTPlan(words int, k uint) fftPlan {
+	if words < 0 || k < 2 || k > uint(len(fftSizeThreshold)+1) {
+		panic("bigfft: invalid FFT plan")
+	}
+	m := words>>k + 1
+	maxInt := int(^uint(0) >> 1)
+	if m > (maxInt-int(k))/(2*_W) {
+		panic("bigfft: FFT coefficient size overflow")
+	}
+	neededBits := 2*m*_W + int(k)
+	roundBits := 1 << (k - 2)
+	if roundBits < _W {
+		roundBits = _W
+	}
+	if neededBits > maxInt-roundBits {
+		panic("bigfft: FFT coefficient rounding overflow")
+	}
+	return fftPlan{k: k, m: m, n: valueSize(k, m, 2)}
+}
+
+func natWordCount(x, y nat) int {
+	if len(x) > int(^uint(0)>>1)-len(y) {
+		panic("bigfft: input length overflow")
+	}
+	return len(x) + len(y)
+}
+
+// selectFFTPlan chooses the complete multiplication configuration. fftSize
+// remains the threshold-table incumbent; this second stage may choose the
+// adjacent transform length when doing so removes an entire valueSize padding
+// step. Each candidate recomputes m and n because neither is transferable
+// between transform lengths.
+func selectFFTPlan(x, y nat) fftPlan {
+	return selectFFTPlanWords(natWordCount(x, y))
+}
+
+func selectFFTPlanWords(words int) fftPlan {
+	k, _ := fftSizeWords(words)
+	p := makeFFTPlan(words, k)
+
+	// At k=12, measurements show recurring windows where k+1's coefficient
+	// length is less than 4/7 of the incumbent. The extra transform stage is
+	// then repaid by smaller pointwise multiplications; at exactly 4/7 it is
+	// not. Keep this measured policy local to amd64/k=12: other architectures
+	// and transform lengths need their own calibration.
+	if plateauPlannerEnabled && k == 12 {
+		next := makeFFTPlan(words, k+1)
+		if 7*next.n < 4*p.n {
+			return next
+		}
+	}
+	return p
 }
 
 // valueSize returns the length (in words) to use for polynomial

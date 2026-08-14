@@ -222,15 +222,58 @@ faster than the alignment pays.
 A cost model over the recursion tree agreed that near-exact halving is optimal, but
 predicted only a 1.7% gain from perfect alignment where the direct measurement shows 30%
 per node — the model treats cost as proportional to `n`, and the real function punishes an
-unlucky `n` far harder. That gap is itself the finding: **the packing waste in `valueSize`
-is worth up to 25% to every caller of `Mul`, not just to scanning**, and is listed as new
-work in [PLAN.md](PLAN.md).
+unlucky `n` far harder. That gap motivated the plateau-aware planner below: it keeps the
+required modulus rounding but changes `k` in the measured windows, recovering 5-19% on
+amd64 without perturbing their boundaries.
 
 Two incidental results: the base of the power table is now built by binary exponentiation
 rather than `(10^14)^(threshold/14)`, so `quadraticScanThreshold` is no longer required to
 be a multiple of 14 — any value is legal. And inputs at or below the threshold skip the
 scanner entirely, which removed a 3.4% regression at 1,000 digits that the first version
 introduced.
+
+## Plateau-aware FFT planning
+
+The 30% `m=63` to `m=64` cliff above was real, but changing the coefficient modulus is not
+free: `n*_W` must remain divisible by `K/4` so that every root-of-unity shift is integral.
+Instead, `BenchmarkFFTPlannerPlateaus` forces the incumbent `k` and its valid `k±1`
+neighbors, independently recomputing `m` and `n`, while running the entire FFT
+multiplication path. It reports the resulting transform words and padding as benchmark
+metrics so the cost model can be checked against time rather than assumed from it.
+
+At `k=12`, `k+1` wins in recurring windows where its coefficient length is less than 4/7
+of the incumbent. At the neighboring padding step the ratio rises to about 2/3 and the
+candidate loses by 17-55%. The production selector therefore uses the strict measured
+inequality `7*next.n < 4*incumbent.n`; it does not relax `valueSize`'s correctness bound.
+
+Separate old/new binaries, ten rotated and interleaved repetitions, 300 ms per sample.
+Serial (`taskset -c 0`, `GOMAXPROCS=1`):
+
+| Incumbent `m` | Role           |   Before |    After | Change / p       |
+| ------------: | -------------- | -------: | -------: | ---------------- |
+|            55 | lower boundary | 31.54 ms | 31.51 ms | ~, p=0.796       |
+|            56 | selected       | 33.99 ms | 31.96 ms | -5.96%, p=0.007  |
+|            62 | selected       | 33.61 ms | 31.84 ms | -5.26%, p=0.003  |
+|            63 | upper boundary | 33.70 ms | 33.87 ms | ~, p=0.912       |
+|            87 | selected       | 63.18 ms | 57.44 ms | -9.08%, p=0.002  |
+|            94 | selected       | 65.08 ms | 57.20 ms | -12.11%, p=0.000 |
+|            95 | upper boundary | 64.61 ms | 62.91 ms | ~, p=0.436       |
+|           111 | lower boundary | 77.38 ms | 77.21 ms | ~, p=0.912       |
+|           112 | selected       | 88.51 ms | 71.42 ms | -19.30%, p=0.000 |
+|           119 | selected       | 89.87 ms | 72.66 ms | -19.15%, p=0.009 |
+|           120 | selected       | 85.91 ms | 71.87 ms | -16.34%, p=0.001 |
+
+Four P-cores (`taskset -c 0-3`, `GOMAXPROCS=4`) confirm the same shape at the stable
+points: `m=56` -5.87% (p=0.005), `m=62` -6.89% (p=0.043), `m=88` -11.82%
+(p=0.000), `m=94` -13.30% (p=0.002), and `m=112..120` -17.3% to -18.1%
+(all p=0.000). The `m=63`, `m=95`, and `m=111` controls are flat. Selected plans trade
+2-11% more bytes per operation for the smaller pointwise operands; allocation counts are
+effectively flat.
+
+The policy is enabled only in default amd64 builds, the implementation measured here.
+`purego`, 386, arm64, and other architectures retain the threshold-table incumbent.
+`planner_bench_test.go` remains the same-binary calibration path before enabling another
+target or implementation.
 
 ## Threshold calibration
 
