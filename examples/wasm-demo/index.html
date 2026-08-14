@@ -95,6 +95,75 @@
         ></textarea>
       </section>
 
+      <section class="benchmark" aria-labelledby="benchmark-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">03 · benchmark</p>
+            <h2 id="benchmark-title">bigfft vs. math/big</h2>
+          </div>
+          <p id="benchmark-status" class="status" data-state="idle" role="status">
+            Ready after WebAssembly loads
+          </p>
+        </div>
+
+        <p class="benchmark-note">
+          A quick browser-local comparison using deterministic operands. Setup,
+          parsing and output formatting are outside the timed region. Choose
+          40k digits or more to exercise the FFT-sized range. The largest
+          presets may keep this tab busy for several seconds.
+        </p>
+
+        <div class="benchmark-controls">
+          <label>
+            <span>Digits per operand</span>
+            <select id="benchmark-digits">
+              <option value="10000">10,000 · dispatch baseline</option>
+              <option value="40000" selected>40,000 · FFT-sized</option>
+              <option value="80000">80,000 · FFT-sized</option>
+              <option value="100000">100,000</option>
+              <option value="250000">250,000</option>
+              <option value="500000">500,000</option>
+              <option value="1000000">1,000,000</option>
+            </select>
+          </label>
+          <label>
+            <span>Measured runs</span>
+            <select id="benchmark-iterations">
+              <option value="1">1</option>
+              <option value="3" selected>3</option>
+              <option value="5">5</option>
+            </select>
+          </label>
+          <button id="run-benchmark" class="primary" type="button" disabled>
+            Run benchmark
+          </button>
+        </div>
+
+        <dl class="metrics benchmark-metrics" aria-label="Benchmark results">
+          <div>
+            <dt>bigfft.Mul</dt>
+            <dd id="benchmark-bigfft">—</dd>
+          </div>
+          <div>
+            <dt>math/big.Mul</dt>
+            <dd id="benchmark-standard">—</dd>
+          </div>
+          <div>
+            <dt>Relative speed</dt>
+            <dd id="benchmark-speedup">—</dd>
+          </div>
+          <div>
+            <dt>Exact result</dt>
+            <dd id="benchmark-verified">—</dd>
+          </div>
+        </dl>
+
+        <p class="benchmark-disclaimer">
+          WebAssembly timings vary by browser, power state and background
+          activity. They do not represent native assembly performance.
+        </p>
+      </section>
+
       <footer>
         <span>bigfft · Schönhage–Strassen multiplication</span>
         <a href="https://github.com/cwbudde/bigfft">Source</a>

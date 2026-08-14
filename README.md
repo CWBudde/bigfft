@@ -78,7 +78,8 @@ fmt.Println(n.BitLen())
 ### Browser demo
 
 The browser demo uses the same decimal parser and multiplication API through a
-small WebAssembly bridge:
+small WebAssembly bridge, and includes a browser-local benchmark against
+`math/big.Int.Mul`:
 
 ```sh
 just run-wasm-demo

@@ -14,6 +14,14 @@
   const parseTime = document.getElementById("parse-time");
   const inputBits = document.getElementById("input-bits");
   const productSize = document.getElementById("product-size");
+  const benchmarkDigits = document.getElementById("benchmark-digits");
+  const benchmarkIterations = document.getElementById("benchmark-iterations");
+  const benchmarkButton = document.getElementById("run-benchmark");
+  const benchmarkStatus = document.getElementById("benchmark-status");
+  const benchmarkBigfft = document.getElementById("benchmark-bigfft");
+  const benchmarkStandard = document.getElementById("benchmark-standard");
+  const benchmarkSpeedup = document.getElementById("benchmark-speedup");
+  const benchmarkVerified = document.getElementById("benchmark-verified");
 
   function setStatus(message, state) {
     status.textContent = message;
@@ -79,6 +87,54 @@
     });
   }
 
+  function showBenchmark(result) {
+    benchmarkBigfft.textContent = `${formatDuration(result.bigfftMillis)} / op`;
+    benchmarkStandard.textContent = `${formatDuration(result.standardMillis)} / op`;
+    if (result.speedup >= 1) {
+      benchmarkSpeedup.textContent = `${result.speedup.toFixed(2)}× faster`;
+    } else if (result.speedup > 0) {
+      benchmarkSpeedup.textContent = `${(1 / result.speedup).toFixed(2)}× slower`;
+    } else {
+      benchmarkSpeedup.textContent = "below timer resolution";
+    }
+    benchmarkVerified.textContent = result.resultsVerified ? "match" : "mismatch";
+    benchmarkVerified.dataset.verified = String(result.resultsVerified);
+    benchmarkStatus.textContent = `${formatCount(result.digits)} digits · ${result.iterations} measured run${result.iterations === 1 ? "" : "s"}`;
+    benchmarkStatus.dataset.state = result.resultsVerified ? "ready" : "error";
+  }
+
+  function runBenchmark() {
+    if (!window.bigfft) return;
+
+    benchmarkButton.disabled = true;
+    benchmarkStatus.textContent = "Benchmarking…";
+    benchmarkStatus.dataset.state = "working";
+
+    // The bridge is synchronous, so allow the working state to paint first.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try {
+          const result = window.bigfft.benchmark({
+            digits: Number(benchmarkDigits.value),
+            iterations: Number(benchmarkIterations.value),
+          });
+          if (result.error) {
+            benchmarkStatus.textContent = result.error;
+            benchmarkStatus.dataset.state = "error";
+            return;
+          }
+          showBenchmark(result);
+        } catch (error) {
+          console.error(error);
+          benchmarkStatus.textContent = `Benchmark failed: ${error.message || error}`;
+          benchmarkStatus.dataset.state = "error";
+        } finally {
+          benchmarkButton.disabled = false;
+        }
+      });
+    });
+  }
+
   async function copyResult() {
     try {
       await navigator.clipboard.writeText(product.value);
@@ -106,6 +162,9 @@
 
     limit.textContent = `Up to ${formatCount(window.bigfft.maxInputDigits)} digits per operand`;
     multiplyButton.disabled = false;
+    benchmarkButton.disabled = false;
+    benchmarkStatus.textContent = "Ready to benchmark";
+    benchmarkStatus.dataset.state = "ready";
     setStatus("WebAssembly ready.", "ready");
   }
 
@@ -115,6 +174,7 @@
     [left.value, right.value] = [right.value, left.value];
   });
   copyButton.addEventListener("click", copyResult);
+  benchmarkButton.addEventListener("click", runBenchmark);
 
   boot().catch((error) => {
     console.error(error);

@@ -112,7 +112,8 @@ footer {
 }
 
 .workbench,
-.results {
+.results,
+.benchmark {
   border: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel) 94%, transparent);
   box-shadow: 0 22px 70px rgb(0 0 0 / 0.2);
@@ -120,6 +121,10 @@ footer {
 }
 
 .results {
+  margin-top: 18px;
+}
+
+.benchmark {
   margin-top: 18px;
 }
 
@@ -199,6 +204,23 @@ button.primary {
   padding: 15px 19px;
 }
 
+select {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  outline: none;
+  background: var(--page);
+  color: var(--text);
+  font: 0.84rem/1 var(--mono);
+  padding: 10px 34px 10px 12px;
+}
+
+select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgb(101 230 180 / 0.12);
+}
+
 .primary-actions {
   justify-content: flex-start;
   margin-top: 18px;
@@ -241,6 +263,44 @@ dd {
 .product {
   min-height: 220px;
   color: var(--accent);
+}
+
+.benchmark-note {
+  max-width: 760px;
+  margin: 24px 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.benchmark-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(150px, 0.55fr) auto;
+  align-items: end;
+  gap: 14px;
+}
+
+.benchmark-controls .primary {
+  min-height: 42px;
+}
+
+.benchmark-metrics {
+  margin-bottom: 14px;
+}
+
+#benchmark-verified[data-verified="true"] {
+  color: var(--accent);
+}
+
+#benchmark-verified[data-verified="false"] {
+  color: var(--error);
+}
+
+.benchmark-disclaimer {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  line-height: 1.5;
 }
 
 footer {
@@ -286,6 +346,10 @@ footer a {
 
   .metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .benchmark-controls {
+    grid-template-columns: 1fr;
   }
 }
 
