@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Multiply very large integers in the browser with bigfft compiled to WebAssembly."
+    />
+    <title>bigfft · WebAssembly demo</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <p class="eyebrow">Go · WebAssembly · exact arithmetic</p>
+        <h1>Big integers, multiplied in your browser.</h1>
+        <p class="lede">
+          This page compiles <code>bigfft</code> to WebAssembly. The operands
+          stay in this tab; Go parses them, chooses the multiplication path,
+          and returns the exact decimal product.
+        </p>
+        <p id="status" class="status" data-state="loading" role="status">
+          Loading WebAssembly…
+        </p>
+      </header>
+
+      <section class="workbench" aria-labelledby="workbench-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">01 · operands</p>
+            <h2 id="workbench-title">Decimal input</h2>
+          </div>
+          <div class="actions secondary-actions">
+            <button id="sample" type="button">Load FFT-sized sample</button>
+            <button id="swap" type="button">Swap</button>
+          </div>
+        </div>
+
+        <div class="operands">
+          <label>
+            <span>Left operand</span>
+            <textarea id="left" rows="7" spellcheck="false">3141592653589793238462643383279502884197</textarea>
+          </label>
+          <div class="operator" aria-hidden="true">×</div>
+          <label>
+            <span>Right operand</span>
+            <textarea id="right" rows="7" spellcheck="false">2718281828459045235360287471352662497757</textarea>
+          </label>
+        </div>
+
+        <div class="actions primary-actions">
+          <button id="multiply" class="primary" type="button" disabled>
+            Multiply with bigfft
+          </button>
+          <span id="limit" class="hint">Up to 100,000 digits per operand</span>
+        </div>
+      </section>
+
+      <section class="results" aria-labelledby="result-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">02 · result</p>
+            <h2 id="result-title">Exact product</h2>
+          </div>
+          <button id="copy" type="button" disabled>Copy result</button>
+        </div>
+
+        <dl class="metrics" aria-label="Multiplication metrics">
+          <div>
+            <dt>Multiply</dt>
+            <dd id="multiply-time">—</dd>
+          </div>
+          <div>
+            <dt>Parse</dt>
+            <dd id="parse-time">—</dd>
+          </div>
+          <div>
+            <dt>Input bits</dt>
+            <dd id="input-bits">—</dd>
+          </div>
+          <div>
+            <dt>Product</dt>
+            <dd id="product-size">—</dd>
+          </div>
+        </dl>
+
+        <textarea
+          id="product"
+          class="product"
+          rows="10"
+          readonly
+          spellcheck="false"
+          placeholder="The product will appear here."
+        ></textarea>
+      </section>
+
+      <footer>
+        <span>bigfft · Schönhage–Strassen multiplication</span>
+        <a href="https://github.com/cwbudde/bigfft">Source</a>
+      </footer>
+    </main>
+
+    <script src="wasm_exec.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

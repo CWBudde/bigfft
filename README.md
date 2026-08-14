@@ -75,6 +75,19 @@ n := bigfft.FromDecimalString(digits)
 fmt.Println(n.BitLen())
 ```
 
+### Browser demo
+
+The browser demo uses the same decimal parser and multiplication API through a
+small WebAssembly bridge:
+
+```sh
+just run-wasm-demo
+```
+
+Then open <http://localhost:8090>. Use `just build-wasm-demo` to build the
+static site into `./dist` without starting a server. See
+[`examples/wasm-demo/README.md`](examples/wasm-demo/README.md) for details.
+
 ### Controlling parallelism
 
 The FFT is parallelized across `GOMAXPROCS` by default for inputs large enough
@@ -118,23 +131,26 @@ re-measure it on your own hardware, run `just calibrate`.
 
 The repository uses [just](https://github.com/casey/just) as its task runner.
 
-| Recipe             | What it does                                                         |
-| ------------------ | -------------------------------------------------------------------- |
-| `just build`       | Build the package                                                    |
-| `just test`        | Run the full suite with the race detector                            |
-| `just test-purego` | Run the suite using architecture-independent Go fallbacks            |
-| `just bench`       | Run all benchmarks                                                   |
-| `just bench-quick` | Run benchmarks with a short time budget                              |
-| `just lint`        | Run golangci-lint                                                    |
-| `just lint-fix`    | Run golangci-lint with `--fix`                                       |
-| `just fmt`         | Format everything via treefmt (gofumpt, gci, markdownlint, prettier) |
-| `just fmt-check`   | Fail if anything is unformatted                                      |
-| `just cover`       | Produce `coverage.txt` and `coverage.html`                           |
-| `just check`       | test + lint + cover                                                  |
-| `just vet-arch`    | `go vet` under GOARCH amd64, 386 and arm64                           |
-| `just calibrate`   | Re-measure the FFT-vs-`math/big` crossover point                     |
-| `just fix`         | `lint-fix` then `fmt`                                                |
-| `just clean`       | Remove coverage, benchmark and test-binary artifacts                 |
+| Recipe                 | What it does                                                         |
+| ---------------------- | -------------------------------------------------------------------- |
+| `just build`           | Build the package                                                    |
+| `just build-wasm`      | Build all packages for `js/wasm`                                     |
+| `just build-wasm-demo` | Build the browser demo into `./dist`                                 |
+| `just run-wasm-demo`   | Build and serve the browser demo on port 8090                        |
+| `just test`            | Run the full suite with the race detector                            |
+| `just test-purego`     | Run the suite using architecture-independent Go fallbacks            |
+| `just bench`           | Run all benchmarks                                                   |
+| `just bench-quick`     | Run benchmarks with a short time budget                              |
+| `just lint`            | Run golangci-lint                                                    |
+| `just lint-fix`        | Run golangci-lint with `--fix`                                       |
+| `just fmt`             | Format everything via treefmt (gofumpt, gci, markdownlint, prettier) |
+| `just fmt-check`       | Fail if anything is unformatted                                      |
+| `just cover`           | Produce `coverage.txt` and `coverage.html`                           |
+| `just check`           | test + lint + cover                                                  |
+| `just vet-arch`        | `go vet` under GOARCH amd64, 386 and arm64                           |
+| `just calibrate`       | Re-measure the FFT-vs-`math/big` crossover point                     |
+| `just fix`             | `lint-fix` then `fmt`                                                |
+| `just clean`           | Remove coverage, benchmark and test-binary artifacts                 |
 
 Cross-architecture coverage matters more here than in most pure-Go packages:
 the owned arithmetic kernels use architecture-specific assembly, while the

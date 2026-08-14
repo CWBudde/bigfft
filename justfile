@@ -2,6 +2,19 @@
 build:
     go build -v ./...
 
+# Build all packages for the WebAssembly target
+build-wasm:
+    GOOS=js GOARCH=wasm go build -v ./...
+
+# Build the browser demo into ./dist
+build-wasm-demo:
+    ./scripts/build-wasm-demo.sh
+
+# Build and serve the browser demo locally
+run-wasm-demo: build-wasm-demo
+    @echo "Starting demo server at http://localhost:8090"
+    python3 -m http.server -d dist 8090
+
 # Run all tests
 # -timeout is a backstop, not a target: the race detector roughly triples the
 # cost of the multi-megabit multiplication tests, which are already the
