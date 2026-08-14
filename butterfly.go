@@ -6,7 +6,8 @@ import (
 )
 
 // butterfly computes sum = x+t and diff = x-t modulo 2^(n*_W)+1.
-// sum may alias x and diff may alias x; t must not alias either destination.
+// Exact aliases sum == x and diff == t are supported. The destinations must
+// not overlap each other, and partial overlaps are not supported.
 //
 // The low n words are computed by butterflyWords in one pass. Keeping the two
 // carry chains together saves one load of each operand compared with separate

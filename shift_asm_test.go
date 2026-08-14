@@ -26,11 +26,6 @@ func TestShiftAsmMatchesGo(t *testing.T) {
 			values = append(values, x)
 		}
 		for xi, x := range values {
-			// shiftMod's fast contract excludes the high representative; Shift
-			// itself continues to handle it through the Go implementation.
-			if x[n] != 0 {
-				continue
-			}
 			for _, k := range shifts {
 				want := make(fermat, n+1)
 				want.Shift(x, k)

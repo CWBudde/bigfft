@@ -126,9 +126,10 @@ are retained, independent of the compatibility win. At `n=80`, approximate media
 | `addMulVVW` | 76.4 ns |  61.6 ns |   -19% |
 
 The old default already reached `math/big` assembly, so these are fallback comparisons,
-not the end-to-end A/B. The user-visible performance change comes from the fused butterfly,
-which computes sum and difference in one payload pass (two-word ADC/SBB blocks on amd64,
-four-word ADCS/SBCS blocks on arm64).
+not the end-to-end A/B. The user-visible performance change comes from the fused Add/Sub
+tail of each butterfly. After `ShiftHalf` produces the twiddle product, this tail computes
+sum and difference in one payload pass (two-word ADC/SBB blocks on amd64, four-word
+ADCS/SBCS blocks on arm64).
 
 Interleaved old/default A/B, ten repetitions, `taskset -c 0`, `GOMAXPROCS=1`:
 

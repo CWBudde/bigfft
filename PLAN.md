@@ -7,16 +7,16 @@ tooling and pursues performance work the original explicitly left as a proof of 
 
 ## Status at a glance
 
-| Area                    | Progress                                               |
-| ----------------------- | ------------------------------------------------------ |
-| Tooling and CI          | done                                                   |
-| Benchmarks              | done                                                   |
-| Parallelism             | done; separate parallel threshold measured, no room    |
-| Allocation / arena      | done                                                   |
-| Threshold recalibration | done: all four measured; one changed, three pinned     |
-| Decimal scanning        | done: balanced split, -4% serial / -8% parallel        |
-| Plan 9 assembly         | done; linknames gone, fused butterflies on amd64/arm64 |
-| Cache blocking and rest | not started                                            |
+| Area                    | Progress                                                 |
+| ----------------------- | -------------------------------------------------------- |
+| Tooling and CI          | done                                                     |
+| Benchmarks              | done                                                     |
+| Parallelism             | done; separate parallel threshold measured, no room      |
+| Allocation / arena      | done                                                     |
+| Threshold recalibration | done: all four measured; one changed, three pinned       |
+| Decimal scanning        | done: balanced split, -4% serial / -8% parallel          |
+| Plan 9 assembly         | done; linknames gone, fused Add/Sub tails on amd64/arm64 |
+| Cache blocking and rest | not started                                              |
 
 ## Measurement discipline (read this before touching performance)
 
@@ -187,15 +187,16 @@ arithmetic kernels have architecture-specific assembly and `fermat.go` is full o
   - `TestScanPowerTable` and `TestScanThresholds` are always-on guards, **verified to fail
     when the odd-length correction is removed**.
 
-- [x] **Owned Plan 9 arithmetic and fused butterflies.** The six unexported `math/big`
+- [x] **Owned Plan 9 arithmetic and fused Add/Sub butterfly tails.** The six unexported
+      `math/big`
       linknames are gone. `addVV`, `subVV`, `lshVU`, and `addMulVVW` are now local amd64
       and arm64 Plan 9 assembly; `addVW`/`subVW` and every `purego` or other-architecture
       build use owned Go implementations. This removes the repository's largest toolchain
       compatibility hazard, including the renamed `shlVU` and `addMulVVW` shims.
-  - The fused butterfly computes the low-word sum and difference together. amd64 uses
-    two-word blocks with independent saved ADC/SBB chains; arm64 uses four-word
-    ADCS/SBCS blocks. Exact differential tests cover carries, borrows, aliases, odd lengths,
-    and guard words.
+  - After `ShiftHalf` produces the twiddle product in `tmp`, the fused butterfly tail
+    computes the low-word sum and difference together. amd64 uses two-word blocks with
+    independent saved ADC/SBB chains; arm64 uses four-word ADCS/SBCS blocks. Exact
+    differential tests cover carries, borrows, aliases, odd lengths, and guard words.
   - The arithmetic kernels are 12-62% faster than their always-available Go oracles at
     representative lengths. This is a fallback comparison, not an end-to-end claim: the
     old build already reached `math/big` assembly through linkname.
@@ -219,7 +220,7 @@ aligned negative shifts. That was the right path — 41-71% of production shifts
 aligned — but dispatching it at the `Shift` boundary made unaligned calls pay for selection,
 while dispatching only at the butterfly call site merely broke even.
 
-Ten interleaved repetitions against the fused-butterfly build: geomean -0.43%, every
+Ten interleaved repetitions against the fused-Add/Sub build: geomean -0.43%, every
 transform and `MulFFT_1Mb`/`5Mb`/`10Mb` comparison p=0.06-0.97. No measurable end-to-end
 gain, so the amd64 shift kernel and dispatch were removed. The owned `lshVU` kernel remains:
 it removes the linkname and is the faster building block on the mixed shift workload.
