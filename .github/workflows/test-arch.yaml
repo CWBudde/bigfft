@@ -7,6 +7,45 @@ permissions:
   contents: read
 
 jobs:
+  test-wasm:
+    name: Test js/wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          GOOS: js
+          GOARCH: wasm
+        run: go build -v ./...
+
+      - name: Vet
+        env:
+          GOOS: js
+          GOARCH: wasm
+        run: go vet ./...
+
+      # wasm_exec forwards its complete environment to Node. Keep that
+      # environment small enough for WebAssembly's argv+environment limit.
+      - name: Run tests
+        shell: bash
+        run: |
+          go_bin="$(go env GOROOT)/bin/go"
+          wasm_exec="$(go env GOROOT)/lib/wasm/go_js_wasm_exec"
+          env -i \
+            HOME="$HOME" \
+            PATH="$PATH" \
+            TMPDIR="$RUNNER_TEMP" \
+            GOCACHE="$RUNNER_TEMP/go-build" \
+            GOOS=js \
+            GOARCH=wasm \
+            "$go_bin" test -exec="$wasm_exec" -v -count=1 -timeout=30m ./...
+
   test-cross-arch:
     name: Test ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ${{ matrix.os }}
