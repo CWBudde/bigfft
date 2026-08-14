@@ -5,6 +5,19 @@ is worth doing next. Upstream is
 [remyoudompheng/bigfft](https://github.com/remyoudompheng/bigfft); this fork adds modern
 tooling and pursues performance work the original explicitly left as a proof of concept.
 
+## Status at a glance
+
+| Area                    | Progress                                                 |
+| ----------------------- | -------------------------------------------------------- |
+| Tooling and CI          | done                                                     |
+| Benchmarks              | done                                                     |
+| Parallelism             | done; separate parallel threshold measured, no room      |
+| Allocation / arena      | done                                                     |
+| Threshold recalibration | done: all four measured; one changed, three pinned       |
+| Decimal scanning        | done: balanced split, -4% serial / -8% parallel          |
+| Plan 9 assembly         | done; linknames gone, fused Add/Sub tails on amd64/arm64 |
+| Cache blocking and rest | not started                                              |
+
 ## Measurement discipline (read this before touching performance)
 
 Nearly every wrong conclusion on this project so far came from bad measurement, not bad
@@ -49,38 +62,40 @@ Profile of `Mul` at 5 Mb operands (single core, pinned), for reference:
 
 ### Tooling and CI
 
-- Module renamed to `github.com/cwbudde/bigfft`; Go floor raised to 1.25 (was 1.12).
-- `.golangci.toml` — golangci-lint v2, `default = all`, every disable carrying a written
-  rationale. `revive`'s `exported` rule is on: the public surface is small and documented.
-- `treefmt.toml` (gofumpt + gci for Go, markdownlint + prettier for Markdown),
-  `.editorconfig`, `.markdownlint.json`, `.gitignore` (the repo previously had none).
-- `justfile` mirroring the sibling `algo-fft` repo's recipe names.
-- Six GitHub Actions workflows in a reusable `workflow_call` layout: unit tests with
-  race detector and coverage, lint, format check, cross-architecture matrix, nightly
-  benchmarks, and a dispatcher.
-- `scripts/run_benchmarks.sh`, `scripts/bench_compare.sh` (benchstat + regression gate).
-- `README` renamed to `README.md` with badges; the 2012/2016 tables preserved in
-  `docs/historical-benchmarks.md`.
+- [x] Module renamed to `github.com/cwbudde/bigfft`; Go floor raised to 1.25 (was 1.12).
+- [x] `.golangci.toml` — golangci-lint v2, `default = all`, every disable carrying a
+      written rationale. `revive`'s `exported` rule is on: the public surface is small and
+      documented.
+- [x] `treefmt.toml` (gofumpt + gci for Go, markdownlint + prettier for Markdown),
+      `.editorconfig`, `.markdownlint.json`, `.gitignore` (the repo previously had none).
+- [x] `justfile` mirroring the sibling `algo-fft` repo's recipe names.
+- [x] Six GitHub Actions workflows in a reusable `workflow_call` layout: unit tests with
+      race detector and coverage, lint, format check, cross-architecture matrix, nightly
+      benchmarks, and a dispatcher.
+- [x] `scripts/run_benchmarks.sh`, `scripts/bench_compare.sh` (benchstat + regression gate).
+- [x] `README` renamed to `README.md` with badges; the 2012/2016 tables preserved in
+      `docs/historical-benchmarks.md`.
 
-The cross-architecture matrix matters more here than in a typical Go library:
-`arith_decl.go` reaches into `math/big` internals via `//go:linkname`, and `fermat.go` is
-full of `_W`-dependent word arithmetic. `GOARCH=386` is verified to vet and test cleanly.
+The cross-architecture matrix matters more here than in a typical Go library: the owned
+arithmetic kernels have architecture-specific assembly and `fermat.go` is full of
+`_W`-dependent word arithmetic. `GOARCH=386` is verified to vet and test cleanly.
 
 ### Benchmarks
 
-- `fermat_bench_test.go` — micro-benchmarks for `Shift`, `ShiftHalf` (even and odd paths
-  measured separately), `Add`, `Sub`, `Mul` (both sides of the `n < 30` branch),
-  `Transform`, `InvTransform`, `polValues.Mul`. Sizes are derived at run time from the
-  real `fftSize`/`valueSize` path rather than hard-coded, so they stay correct on 32-bit.
+- [x] `fermat_bench_test.go` — micro-benchmarks for `Shift`, `ShiftHalf` (even and odd
+      paths measured separately), `Add`, `Sub`, `Mul` (both sides of the
+      `fermatBasicMulThreshold` branch), `Transform`, `InvTransform`, `polValues.Mul`.
+      Sizes are derived at run time from the real `fftSize`/`valueSize` path rather than
+      hard-coded, so they stay correct on 32-bit.
 
 ### Performance
 
-- **Parallelism** (`parallel.go`): the pointwise multiply (~35% of runtime), the `fourier`
-  recursion and its butterfly loops (~45%) are sharded across up to `GOMAXPROCS` workers
-  via a `parRange` helper that runs the last shard inline and spawns only `w-1`
-  goroutines. `SetMaxParallelism`/`MaxParallelism` control it; below
-  `parallelWordThreshold` (8192 words of transform array, measured) it stays serial.
-  Results are bit-identical to the serial path — only scheduling changes.
+- [x] **Parallelism** (`parallel.go`): the pointwise multiply (~35% of runtime), the
+      `fourier` recursion and its butterfly loops (~45%) are sharded across up to
+      `GOMAXPROCS` workers via a `parRange` helper that runs the last shard inline and
+      spawns only `w-1` goroutines. `SetMaxParallelism`/`MaxParallelism` control it; below
+      `parallelWordThreshold` (8192 words of transform array, measured) it stays serial.
+      Results are bit-identical to the serial path — only scheduling changes.
   - Measured on four pinned P-cores: −22.5% at 500 kb, −30.1% at 1 Mb, −43.1% at 5 Mb,
     −48.0% at 10 Mb (all p < 0.001). Whole machine at 10 Mb: −62.7%. Serial cost ~1–2%.
   - The two forward transforms were **left sequential**: both stage through arena region
@@ -93,31 +108,124 @@ full of `_W`-dependent word arithmetic. `GOARCH=386` is verified to vet and test
   - Race coverage was **verified, not assumed**: deliberately pointing two workers at a
     shared buffer produces `DATA RACE` reports in both `polValues.mul` and the butterfly
     loop. A green `-race` run proves nothing if the parallel path never ran.
-- **Scratch arena** (`fftScratch`): one allocation set per `fftmul` call, replacing
-  per-stage `make` calls in five places. `MulFFT_1Mb` went from 30 allocations and
-  3.68 MB per operation to 12 allocations and 2.02 MB — 60% fewer allocations, 45% less
-  memory. Wall-clock effect was within noise; this library is arithmetic-bound, not
-  allocation-bound. Kept anyway: the allocation win is real and deterministic, and
-  per-worker buffers are a prerequisite for parallelism.
+- [x] **Scratch arena** (`fftScratch`): one allocation set per `fftmul` call, replacing
+      per-stage `make` calls in five places. `MulFFT_1Mb` went from 30 allocations and
+      3.68 MB per operation to 12 allocations and 2.02 MB — 60% fewer allocations, 45% less
+      memory. Wall-clock effect was within noise; this library is arithmetic-bound, not
+      allocation-bound. Kept anyway: the allocation win is real and deterministic, and
+      per-worker buffers are a prerequisite for parallelism.
   - Trap encountered and documented in-code: `math/big`'s internal `alias` check compares
     the address of the **last word of capacity**, so naive sub-slices of one backing array
     all look mutually aliasing. That made `big.Int.Mul` allocate defensively for every one
     of 1024 pointwise products (1038 allocs/op, worse than no arena). Every arena
     sub-slice therefore uses three-index slicing so `cap == len`.
     `TestArenaCapacitiesBounded` guards this and has been verified to fail when reverted.
-- **Word-aligned shift guard**: `fermat.Shift` ended with an unconditional
-  `shlVU(z, z, kb)`, which for `kb == 0` is a full-length copy of a buffer onto itself.
-  Instrumentation showed 41% (5 Mb) to 71% (1 Mb) of `Shift` calls are word-aligned, and
-  `lshVU` is ~11% of total runtime. Now guarded. Costs one predictable branch on the
-  unaligned path.
-- **Test coverage gap closed**: `TestFermatShiftHalf` only ever exercised `n = 3`, so the
-  even-`n` (word-aligned halves) case was entirely untested. `fermat_shifthalf_test.go`
-  adds value-based checks against `big.Int` across even and odd `n`, negative `k`,
-  `k > 2N`, and `k` near multiples of `N`.
+- [x] **Word-aligned shift guard**: `fermat.Shift` ended with an unconditional
+      `shlVU(z, z, kb)`, which for `kb == 0` is a full-length copy of a buffer onto itself.
+      Instrumentation showed 41% (5 Mb) to 71% (1 Mb) of `Shift` calls are word-aligned,
+      and `lshVU` is ~11% of total runtime. Now guarded. Costs one predictable branch on
+      the unaligned path.
+- [x] **Test coverage gap closed**: `TestFermatShiftHalf` only ever exercised `n = 3`, so
+      the even-`n` (word-aligned halves) case was entirely untested.
+      `fermat_shifthalf_test.go` adds value-based checks against `big.Int` across even and
+      odd `n`, negative `k`, `k > 2N`, and `k` near multiples of `N`.
+- [x] **Threshold recalibration.** All four 2012-era constants re-measured under the
+      protocol above; one changed, three pinned with the data published in BENCHMARKS.md.
+      `quadraticScanThreshold` and `fermat.Mul`'s cutoff are now `var`s so the harness can
+      sweep them; production never assigns to them.
+  - **`fftSizeThreshold[8]`: `1<<18` → `1<<19`** — the only change. At the old boundary an
+    FFT of length `1<<8` beat the `1<<9` the table switched to by 20%, monotonically, with
+    parity only at twice the boundary. Interleaved A/B on the public `Mul`: **−21.7% at
+    150 kbit, −11.0% at 200 kbit, −8.1% at 250 kbit** serial (−24.1 / −13.8 / −12.4% on
+    four P-cores), all p < 0.001, with `Mul_100kb` (below `fftThreshold`, never enters
+    `fftmul`) flat as a control and no regression at 500 kbit or 1 Mb.
+  - Entries 3–7 show the identical shape but lie entirely below `fftThreshold`, so the
+    public `Mul` cannot select them and no end-to-end benchmark can confirm a change.
+    **Left unchanged** deliberately. Entries 9–13 oscillate across 1.0 — the `fftThreshold`
+    signature — and 14–15 were not measured (629 Mbit operands exceed available memory).
+  - **`fermat.Mul`'s cutoff: left at 30.** From `n=14` to `n=48` schoolbook and
+    `big.Int.Mul` are within 1.00 ± 3% of each other with no crossover; the two have simply
+    converged. And the table change moved the 131–211 kbit window from `k=9` to `k=8`,
+    so `basicMul` is now **unreachable through the public `Mul` on both word sizes** (it
+    already was on 386). `TestFermatBasicMulThresholdReachable` enumerates this mechanically
+    and will say so again if the table moves.
+  - **`quadraticScanThreshold`: left at 1232.** The spread across candidates is not noise
+    but recursion-tree quantization — thresholds a power of two apart time identically to
+    within 1%, families differ by up to 22%, and the ranking inverts between input sizes.
+    That quantization is what prompted the balanced-split rewrite, done next and recorded
+    below; the threshold itself is still 1232 after it.
+  - Two always-on guards were added and **verified to fail when reverted**:
+    `TestFFTSizeThresholdMonotone` (`fftSize` takes the first entry `> bits`, so a
+    non-monotone table silently picks the wrong `k` with nothing else failing) and
+    `TestFermatBasicMulThresholdReachable`.
+  - Method note: the new sweeps publish a flat grid instead of bisecting. Bisection is how
+    the 2012 constants were produced and it cannot tell a crossover from an oscillation —
+    which is precisely what it did to `fftThreshold`. Every constant that moved here had a
+    monotone curve _and_ an interleaved A/B on the public API behind it.
+
+- [x] **Balanced splitting in `scan.go`.** `FromDecimalString` now splits exactly in half
+      and builds a per-input power table (one entry per depth, each the square of the next,
+      times ten for odd lengths) instead of splitting off the largest cached
+      `quadraticScanThreshold << k` chunk. Interleaved A/B: **−12.2% at 10k digits, −6.5%
+      at 100k, −8.8% at 1M, −6.9% at 2M** serial, all p < 0.001; **−12.5 / −9.5 / −10.4%**
+      on four P-cores. Geomean −4.0% serial, −8.3% parallel.
+  - 5M–10M is flat in the ten-repetition run but measured **+1.8% and +3.7%** in a tighter
+    twelve-repetition one, and that regression is real. The old `1232 << k` chunk length is
+    about `2^(12+k)` bits (1232 digits = 4092.8, just under 4096), so every chunk landed
+    near the top of a `valueSize` plateau by construction. Exact halving lands wherever the
+    input falls. Reported rather than hidden.
+  - Recovering the alignment by shading the split **does not work**, and
+    `TestCalibrateScanSplit` keeps the evidence: from 97% to 100% of half the timings are
+    flat, and below that they degrade sharply (10M digits: 986 ms at exact half, 1.18 s at
+    95%, 1.85 s at 90%) because the imbalance compounds down the recursion faster than the
+    alignment pays.
+  - Incidental: the table base is now built by binary exponentiation, so
+    `quadraticScanThreshold` no longer has to be a multiple of 14 — any value is legal, and
+    the sweep in `TestCalibrateScan` may be widened accordingly. Inputs at or below the
+    threshold bypass the scanner entirely, which removed a 3.4% regression at 1k digits
+    that the first version introduced.
+  - `TestScanPowerTable` and `TestScanThresholds` are always-on guards, **verified to fail
+    when the odd-length correction is removed**.
+
+- [x] **Owned Plan 9 arithmetic and fused Add/Sub butterfly tails.** The six unexported
+      `math/big`
+      linknames are gone. `addVV`, `subVV`, `lshVU`, and `addMulVVW` are now local amd64
+      and arm64 Plan 9 assembly; `addVW`/`subVW` and every `purego` or other-architecture
+      build use owned Go implementations. This removes the repository's largest toolchain
+      compatibility hazard, including the renamed `shlVU` and `addMulVVW` shims.
+  - After `ShiftHalf` produces the twiddle product in `tmp`, the fused butterfly tail
+    computes the low-word sum and difference together. amd64 uses two-word blocks with
+    independent saved ADC/SBB chains; arm64 uses four-word ADCS/SBCS blocks. Exact
+    differential tests cover carries, borrows, aliases, odd lengths, and guard words.
+  - The arithmetic kernels are 12-62% faster than their always-available Go oracles at
+    representative lengths. This is a fallback comparison, not an end-to-end claim: the
+    old build already reached `math/big` assembly through linkname.
+  - Interleaved end-to-end A/B, ten repetitions, single P-core: transform `n=27` is
+    **-6.0%** (p=0.002); transforms `n=64`/`n=80` and `MulFFT` at 1/5/10 Mb show no
+    measured difference (all p=0.53-0.97). Geomean -1.9%; allocations unchanged.
+  - `purego` is tested on every CI architecture, and default plus purego builds are vetted
+    per GOARCH so asmdecl checks every assembly declaration/frame pair.
+  - A complete arm64 shift-mod kernel and same-binary benchmark are present but deliberately
+    not dispatched until the native ARM machine is available. QEMU validates it bit-exactly
+    but cannot supply meaningful performance data.
 
 ## Tried and rejected
 
-### Fused odd-`k` `ShiftHalf` — correct, faster, and pointless
+### ~~amd64 shift-mod dispatch~~ — the hot aligned primitive did not move `MulFFT`
+
+Two amd64 shift kernels were measured. A faithful monolithic port was 40-80% slower than
+the existing composition of copy/subtract/`lshVU`. A specialized one-pass negacyclic word
+rotation did win on aligned positive shifts (about 27% at `n=80`) and was roughly flat on
+aligned negative shifts. That was the right path — 41-71% of production shifts are word
+aligned — but dispatching it at the `Shift` boundary made unaligned calls pay for selection,
+while dispatching only at the butterfly call site merely broke even.
+
+Ten interleaved repetitions against the fused-Add/Sub build: geomean -0.43%, every
+transform and `MulFFT_1Mb`/`5Mb`/`10Mb` comparison p=0.06-0.97. No measurable end-to-end
+gain, so the amd64 shift kernel and dispatch were removed. The owned `lshVU` kernel remains:
+it removes the linkname and is the faster building block on the mixed shift workload.
+
+### ~~Fused odd-`k` `ShiftHalf`~~ — correct, faster, and pointless
 
 For odd `k`, `ShiftHalf` computed `2^a·x - 2^b·x` as two full `Shift`s plus a `Sub`.
 Since `a - b` is always exactly `N/2`, this factors as `(2^(N/2) - 1)·t` with `t = 2^b·x`,
@@ -144,73 +252,84 @@ The general lesson is rule 5 above: this was proposed on a plausible reading of 
 profile (`fermat.Shift` at 22%) without checking which _path_ through `Shift` that 22%
 represented. It was the even path.
 
-## Next
+### ~~A separate threshold for the parallel path~~ — the crossover barely moves
+
+The idea, carried at the top of the to-do list since the parallel path landed: `fftThreshold`
+was calibrated with parallelism disabled, so with four cores the FFT should start beating
+`math/big` well below 1800 words, and a second lower threshold selected when parallelism is
+active would pick up the band between the two crossovers.
+
+The band is essentially empty. `BenchmarkMulDispatchCrossover` times Karatsuba against both
+FFT modes across the region, 30 interleaved repetitions:
+
+```
+operand    big vs serial FFT    big vs parallel FFT
+ 90 kbit        +3.64%                 +7.38%
+105 kbit        +7.89%                 +8.28%
+115 kbit        +8.46%              ~  (p=0.051)
+120 kbit        -2.99%                 -8.29%
+150 kbit       -15.05%                -26.01%
+```
+
+The parallel FFT breaks even at **115 kbit**; `fftThreshold = 1800` words is **115.2 kbit**.
+Four cores move the dispatch crossover by about 3 kbit — some 60 words, under 3% — not the
+substantial shift the item assumed. There is no range to pick up, and a second threshold
+would add a mode to the dispatch logic in exchange for nothing.
+
+Two things came out of the measurement that were worth having anyway:
+
+- The transform-array sizes documented for `parallelWordThreshold` were **stale**. They
+  predated `fftSizeThreshold[8]` going from `1<<18` to `1<<19`, which moved 150 kbit
+  operands from `k=9` to `k=8` and from 11776 to 10240 words. The re-measurement also
+  overturned one of its data points: 100 kbit was recorded as `p=0.70`, "no difference", and
+  is actually −2.05% at 30 repetitions. The crossover is between 5632 and 7168 words, not
+  between 7168 and 11776.
+- `parallelWordThreshold` was nonetheless **left at 8192**, because 8192 words of transform
+  array is 1792 words per operand against an `fftThreshold` of 1800. Everything a lower gate
+  would admit lies below the point where `Mul` enters the FFT, so lowering it would change
+  nothing reachable through the public API.
+
+`TestParallelDispatchOverlap` now records the relationship between the two gates
+mechanically and will say so if a future table change opens a band that today is eight words
+wide. The measurements are **provisional**: taken at load average 2.3–3.6 rather than idle,
+at the user's direction, with dispersion of ±0–2%, every p at 0.000, and monotone curves. A
+confirming run on a quiet machine is still owed, and they are marked as such in
+BENCHMARKS.md.
+
+The lesson is a variant of rule 5: the premise had been sitting in BENCHMARKS.md as a plain
+assertion ("with parallelism enabled the FFT wins earlier than 1800 words") long enough to
+look like a finding. It had never been measured.
+
+## To do
 
 Roughly in expected-value order.
 
-### 1. A separate threshold for the parallel path
+### 1. Smaller items
 
-`fftThreshold` was calibrated with parallelism disabled, deliberately, so that it stays
-correct for callers using `SetMaxParallelism(1)`. But with parallelism on the FFT starts
-winning below 1800 words, so the default dispatch switches later than it should. A second,
-lower threshold selected when parallelism is active would pick up the range between the
-two crossovers. Measure both crossovers under the protocol above before choosing numbers.
-
-### 2. Threshold recalibration
-
-`fftThreshold = 1800`, the `fftSizeThreshold` table, `quadraticScanThreshold = 1232`, and
-`fermat.Mul`'s `n < 30` basicMul cutoff were all calibrated on a Core 2 Quad around 2012,
-against a `math/big` whose Karatsuba and assembly kernels have improved substantially
-since. `fftThreshold` has now been re-measured serially and pinned: the speedup oscillates
-between 0.75 and 1.11 across the crossover region with no clean transition, and the
-existing 1800 words sits at the low edge of that band. **It was left unchanged** — the
-2012 value is still approximately right, and picking a new number from that data would be
-fitting noise. See BENCHMARKS.md.
-
-Still outstanding: `quadraticScanThreshold = 1232` in `scan.go` and `fermat.Mul`'s
-`n < 30` basicMul cutoff, neither of which has been re-measured.
-
-### 3. Plan 9 assembly
-
-The headline long-term item, and the reason to care about it is not only speed:
-`arith_decl.go` pulls seven unexported symbols out of `math/big` via `//go:linkname`.
-Those have no compatibility guarantee, and Go has already renamed some of them
-(`shlVU` → `lshVU`, `addMulVVW` → `addMulVVWW`); they survive today only because the
-toolchain keeps compatibility shims for known linkname users. Owning the kernels removes
-the single largest fragility in this repository.
-
-Targets, in order:
-
-1. A **fused butterfly kernel** for amd64: `ShiftHalf` + `Add`/`Sub` in one pass with ADC
-   /SBB carry chains. The current butterfly makes three passes over an `n`-word buffer
-   through a `tmp` intermediate; one pass computing sum and difference together should be
-   a clear win, and unlike the pure-Go version it is not competing against `math/big`'s
-   hand-written assembly for the individual `addVV`/`subVV` steps. (A pure-Go fusion was
-   considered and dropped for exactly that reason: a hand-rolled Go carry loop loses to
-   two calls into assembly.)
-2. A **shift-mod-2^n+1 kernel** (`fermat.Shift`), the single hottest primitive at 22%.
-3. Then arm64.
-
-Plumbing required, modelled on the sibling `algo-fft` repository
-(`internal/asm/arch_*.go` and its `test-arch.yaml`):
-
-- A `purego` build tag with a pure-Go fallback, built **and tested** on every matrix
-  entry — the fallback is a supported configuration, not dead code.
-- `go vet` per GOARCH in CI (`asmdecl` checks assembly frame sizes and FP references
-  against the Go declarations; this is what catches decl↔asm drift).
-- Assembly-vs-Go differential tests, in the style of the `ShiftHalf` differential test.
-
-### 4. Smaller items
-
-- **Cache-blocked / six-step transform** for sizes whose working set exceeds L2. At 5 Mb
-  the transform is memory-bound, which is also why fusing passes is the recurring theme
-  above.
-- **Recursive Schönhage–Strassen for the pointwise products** instead of delegating to
-  `big.Int.Mul`, once the values are large enough for that to pay.
-- **`sync.Pool` for arenas**, now that a per-call arena exists. Worth it only if a
-  workload does many multiplies; measure before adding global state.
-- **Reuse scan temporaries** — `scan.go` carries a `// FIXME: reuse temporaries.` and
-  allocates a fresh `big.Int` per recursion level.
-- **Wisdom-style persisted auto-tuning** to replace the hand-run `-calibrate` flag.
-- **Fuzz targets** for `Mul` and `FromDecimalString`, wired to a time-budgeted CI job.
-- **Big-endian coverage**. 32-bit is already covered by the `GOARCH=386` leg.
+- [ ] **Cache-blocked / six-step transform** for sizes whose working set exceeds L2. At
+      5 Mb the transform is memory-bound, which is also why fusing passes is the recurring
+      theme above.
+- [ ] **Recursive Schönhage–Strassen for the pointwise products** instead of delegating to
+      `big.Int.Mul`, once the values are large enough for that to pay.
+- [ ] **`sync.Pool` for arenas**, now that a per-call arena exists. Worth it only if a
+      workload does many multiplies; measure before adding global state.
+- [ ] **Coefficient packing waste in `valueSize`** — the largest unclaimed win on this
+      list, and it applies to every caller of `Mul`, not to one code path.
+      `valueSize` rounds a coefficient up to a multiple of `1 << (k-2)` bits, so `Mul` cost
+      is a step function of operand size with plateaus up to 25% wide. Measured at k=12:
+      `m` from 56 to 62 all cost 33–37 ms at `n=128`, and `m=64` jumps to 43 ms at `n=144`
+      — **30% more time for 3% more data**. An operand that lands just past a boundary pays
+      for a whole extra step. Directions worth trying: pick `k` by modelled cost rather
+      than by a size table (the table cannot see where inside a plateau a size falls), or
+      relax the `1 << (k-2)` rounding, whose `extra=2` slack may be more than correctness
+      needs. Note that the measured penalty is far larger than the ratio of `n` values, so
+      whatever model is used must be fitted against measurements, not derived from `n`
+      alone — a tree-cost model built on `n` under-predicted this by more than 10x. See
+      BENCHMARKS.md § Balanced splitting.
+- [ ] **Reuse scan temporaries** — `scan.go` carries a `// FIXME: reuse temporaries.` and
+      allocates a fresh `big.Int` per recursion level. `FromDecimalString` also builds a
+      fresh power table per call, which is now sized for the specific input and so cannot
+      be cached across calls of different lengths — but the `Mul` destinations can be.
+- [ ] **Wisdom-style persisted auto-tuning** to replace the hand-run `-calibrate` flag.
+- [ ] **Fuzz targets** for `Mul` and `FromDecimalString`, wired to a time-budgeted CI job.
+- [ ] **Big-endian coverage**. 32-bit is already covered by the `GOARCH=386` leg.

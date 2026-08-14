@@ -122,6 +122,7 @@ The repository uses [just](https://github.com/casey/just) as its task runner.
 | ------------------ | -------------------------------------------------------------------- |
 | `just build`       | Build the package                                                    |
 | `just test`        | Run the full suite with the race detector                            |
+| `just test-purego` | Run the suite using architecture-independent Go fallbacks            |
 | `just bench`       | Run all benchmarks                                                   |
 | `just bench-quick` | Run benchmarks with a short time budget                              |
 | `just lint`        | Run golangci-lint                                                    |
@@ -136,9 +137,9 @@ The repository uses [just](https://github.com/casey/just) as its task runner.
 | `just clean`       | Remove coverage, benchmark and test-binary artifacts                 |
 
 Cross-architecture coverage matters more here than in most pure-Go packages:
-`arith_decl.go` reaches into `math/big`'s internal word routines with
-`//go:linkname`, and the arithmetic in `fermat.go` is written in terms of the
-machine word size `_W`. Both 32-bit and 64-bit words are exercised in CI.
+the owned arithmetic kernels use architecture-specific assembly, while the
+fallbacks and the arithmetic in `fermat.go` are written in terms of the machine
+word size `_W`. Both 32-bit and 64-bit words are exercised in CI.
 
 ## Relationship to upstream
 

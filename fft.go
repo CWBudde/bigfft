@@ -187,10 +187,18 @@ func zeroWords(x []big.Word) {
 
 // fftSizeThreshold[i] is the maximal size (in bits) where we should use
 // fft size i.
+//
+// Entry 8 was raised from 1<<18 to 1<<19 in 2026: at the old boundary an FFT
+// of length 1<<8 beat the 1<<9 the table switched to by 20%, and the two only
+// reached parity at twice that size. It is the lowest entry the public Mul can
+// select, and moving it is worth -22% at 150 kbit per operand. The entries
+// below it show the same shape but lie entirely under fftThreshold, so Mul
+// never selects them; the ones above oscillate and were left alone. See
+// BENCHMARKS.md.
 var fftSizeThreshold = [...]int64{
 	0, 0, 0,
 	4 << 10, 8 << 10, 16 << 10, // 5
-	32 << 10, 64 << 10, 1 << 18, 1 << 20, 3 << 20, // 10
+	32 << 10, 64 << 10, 1 << 19, 1 << 20, 3 << 20, // 10
 	8 << 20, 30 << 20, 100 << 20, 300 << 20, 600 << 20,
 }
 
@@ -573,8 +581,7 @@ func butterflies(dst1, dst2 []fermat, lo, hi, ω2shift int, ft *fourierTemps) {
 	tmp, tmp2 := ft.tmp, ft.tmp2
 	for i := lo; i < hi; i++ {
 		tmp.ShiftHalf(dst2[i], i*ω2shift, tmp2) // ω^i * dst2[i]
-		dst2[i].Sub(dst1[i], tmp)
-		dst1[i].Add(dst1[i], tmp)
+		butterfly(dst1[i], dst2[i], dst1[i], tmp)
 	}
 }
 

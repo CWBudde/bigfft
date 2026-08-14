@@ -16,14 +16,20 @@ import (
 // fftSize(x, y) yields the FFT length k and the chunk size m, and
 // valueSize(k, m, 2) yields n, the coefficient length in words used by
 // poly.Mul (extra=2, exactly as in poly.Mul). So every (n, k) pair below is
-// a pair that Mul() really reaches for that input size.
+// the pair the FFT path really uses for that input size.
 //
 // The representative inputs are ~100kb, ~1Mb and ~5Mb per operand, which on
 // a 64-bit platform come out as:
 //
-//	100kb -> k=8,  m=13, n=27   (n < 30: fermat.Mul takes the basicMul branch)
-//	1Mb   -> k=10, m=31, n=64   (n >= 30: fermat.Mul takes the big.Int branch)
-//	5Mb   -> k=12, m=39, n=80   (n >= 30: fermat.Mul takes the big.Int branch)
+//	100kb -> k=8,  m=13, n=27   (basicMul branch; see the caveat below)
+//	1Mb   -> k=10, m=31, n=64   (big.Int branch)
+//	5Mb   -> k=12, m=39, n=80   (big.Int branch)
+//
+// Caveat on the 100kb row: 100 kbit is 1562 words on 64-bit, below
+// fftThreshold (1800), so the public Mul dispatches that size to math/big and
+// never builds this configuration. It is reached only by mulFFT / poly.Mul,
+// as these benchmarks do. TestFermatBasicMulThresholdReachable in
+// threshold_test.go enumerates what Mul itself can reach.
 //
 // On a 32-bit platform the numbers differ, which is why they are computed
 // rather than hard-coded. Subtest names are "n=<n>/k=<k>" so benchstat
@@ -172,7 +178,7 @@ func BenchmarkFermatSub(b *testing.B) {
 	}
 }
 
-// BenchmarkFermatMul covers both sides of the n < 30 branch in fermat.Mul:
+// BenchmarkFermatMul covers both sides of the fermatBasicMulThreshold branch in fermat.Mul:
 // basicMul for small coefficients, big.Int.Mul (Karatsuba) for large ones.
 // The derived sizes above already contain at least one of each on 64-bit;
 // n=16 is added so the basicMul side is covered on every platform.
@@ -187,7 +193,7 @@ func BenchmarkFermatMul(b *testing.B) {
 	}
 	for _, c := range cases {
 		branch := "bigint"
-		if c.n < 30 {
+		if c.n < fermatBasicMulThreshold {
 			branch = "basicMul"
 		}
 		b.Run(c.name+"/"+branch, func(b *testing.B) {

@@ -309,7 +309,14 @@ func benchmarkMul(b *testing.B, sizex, sizey int) {
 
 func BenchmarkMul_50kb(b *testing.B)  { benchmarkMul(b, 5e4, 5e4) }
 func BenchmarkMul_100kb(b *testing.B) { benchmarkMul(b, 1e5, 1e5) }
+
+// 150kb, 200kb and 250kb bracket the fftSizeThreshold[8] boundary (1<<18 total
+// bits, i.e. 131 kbit per operand), which is the lowest entry in the table the
+// public Mul can select. See BENCHMARKS.md.
+func BenchmarkMul_150kb(b *testing.B) { benchmarkMul(b, 15e4, 15e4) }
 func BenchmarkMul_200kb(b *testing.B) { benchmarkMul(b, 2e5, 2e5) }
+func BenchmarkMul_250kb(b *testing.B) { benchmarkMul(b, 25e4, 25e4) }
+
 func BenchmarkMul_500kb(b *testing.B) { benchmarkMul(b, 5e5, 5e5) }
 func BenchmarkMul_1Mb(b *testing.B)   { benchmarkMul(b, 1e6, 1e6) }
 func BenchmarkMul_2Mb(b *testing.B)   { benchmarkMul(b, 2e6, 2e6) }

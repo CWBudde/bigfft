@@ -49,22 +49,38 @@ func MaxParallelism() int {
 // parallelWordThreshold is the size, in machine words of one transform array
 // ((n+1)<<k), below which a multiplication stays serial.
 //
-// It was measured, not guessed. BenchmarkMulFFTParallelSweep runs every
-// operand size both ways in one binary; with the threshold disabled, on a
-// 12th Gen i7-1255U at GOMAXPROCS=12, 14 interleaved repetitions gave
+// It was measured, not guessed. BenchmarkMulFFTParallelSweep runs every operand
+// size both ways in one binary with the gate disabled on the parallel side; on
+// a 12th Gen i7-1255U pinned to four P-cores at GOMAXPROCS=4, 30 interleaved
+// repetitions gave
 //
 //	operand   transform array   parallel vs serial
-//	 50 kbit         4096 w      +10.6%  (p=0.027)  slower
-//	100 kbit         7168 w        ~     (p=0.70)   no difference
-//	150 kbit        11776 w      -21.0%  (p<0.001)  faster
-//	200 kbit        14848 w      -32.0%  (p<0.001)  faster
+//	 50 kbit         4096 w      +9.13%  slower
+//	 75 kbit         5632 w      +3.14%  slower
+//	100 kbit         7168 w      -2.05%  faster
+//	125 kbit         8704 w      -5.59%
+//	150 kbit        10240 w     -12.03%
+//	200 kbit        13312 w     -16.05%
 //
-// so the crossover lies between 7k and 12k words. The threshold is set at the
-// low end of that gap: everything measurably faster is admitted, and the one
-// size that was measurably slower is excluded by a wide margin. Below it the
-// transform is small enough that goroutine hand-off and the loss of a warm
+// (all p = 0.000), so the crossover lies between 5632 and 7168 words. Below it
+// the transform is small enough that goroutine hand-off and the loss of a warm
 // cache eat the gain.
-const parallelWordThreshold = 8 << 10
+//
+// The value is nevertheless 8192 rather than 7168, and deliberately so: 8192
+// words of transform array is 1792 words per operand, and fftThreshold is 1800,
+// so everything a lower gate would admit sits below the size at which Mul enters
+// the FFT at all. Lowering it would affect direct mulFFT callers only. The
+// figures this comment carried until 2026 were also stale in the other
+// direction — they predated fftSizeThreshold[8] going from 1<<18 to 1<<19, which
+// moved 150 kbit operands from k=9 to k=8 and from 11776 to 10240 words.
+//
+// See BENCHMARKS.md § parallelWordThreshold, which also records the measurement
+// that closed the "separate threshold for the parallel path" idea: a parallel
+// FFT overtakes math/big at 115 kbit, and fftThreshold is 115.2 kbit.
+//
+// It is a var only so that the calibration harness can sweep it; production
+// code never assigns to it.
+var parallelWordThreshold = 8 << 10
 
 // parallelWorkers reports how many workers a transform of 1<<k coefficients
 // of n+1 words should use. It returns 1 when the problem is too small to be

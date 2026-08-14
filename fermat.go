@@ -148,12 +148,22 @@ func (z fermat) Sub(x, y fermat) fermat {
 	return z
 }
 
+// fermatBasicMulThreshold is the value of n (the number of words modulo
+// 2^(n*_W)+1) below which schoolbook basicMul beats handing the product to
+// big.Int.Mul, which is Karatsuba plus hand-written assembly kernels.
+//
+// Calibrated on a Core 2 Quad around 2012; see BENCHMARKS.md for the current
+// measurement. It is a var only so that the calibration harness can sweep it —
+// production code never assigns to it, and callers always supply a destination
+// of 8*n words (fft.go), while both branches need at most 2n+2.
+var fermatBasicMulThreshold = 30
+
 func (z fermat) Mul(x, y fermat) fermat {
 	if len(x) != len(y) {
 		panic("Mul: len(x) != len(y)")
 	}
 	n := len(x) - 1
-	if n < 30 {
+	if n < fermatBasicMulThreshold {
 		z = z[:2*n+2]
 		basicMul(z, x, y)
 		z = z[:2*n+1]
