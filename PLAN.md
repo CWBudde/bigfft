@@ -76,9 +76,9 @@ Profile of `Mul` at 5 Mb operands (single core, pinned), for reference:
 - [x] `README` renamed to `README.md` with badges; the 2012/2016 tables preserved in
       `docs/historical-benchmarks.md`.
 
-The cross-architecture matrix matters more here than in a typical Go library:
-`arith_decl.go` reaches into `math/big` internals via `//go:linkname`, and `fermat.go` is
-full of `_W`-dependent word arithmetic. `GOARCH=386` is verified to vet and test cleanly.
+The cross-architecture matrix matters more here than in a typical Go library: the owned
+arithmetic kernels have architecture-specific assembly and `fermat.go` is full of
+`_W`-dependent word arithmetic. `GOARCH=386` is verified to vet and test cleanly.
 
 ### Benchmarks
 
