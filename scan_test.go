@@ -78,6 +78,10 @@ func TestScanPowerTable(t *testing.T) {
 		if len(s.digits) == 0 {
 			t.Fatalf("size %d: empty table", size)
 		}
+		if len(s.tmp) != len(s.digits) {
+			t.Fatalf("size %d: %d temporaries for %d recursion depths",
+				size, len(s.tmp), len(s.digits))
+		}
 		if got := s.digits[len(s.digits)-1]; got > quadraticScanThreshold {
 			t.Errorf("size %d: deepest chunk %d exceeds the threshold %d",
 				size, got, quadraticScanThreshold)

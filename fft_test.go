@@ -359,3 +359,28 @@ func TestIssue1(t *testing.T) {
 		t.Fatal("incorrect Mul result")
 	}
 }
+
+func TestMulInto(t *testing.T) {
+	for _, words := range []int{64, fftThreshold + 1} {
+		x := new(big.Int).SetBits(rndNat(words))
+		y := new(big.Int).SetBits(rndNat(words + 1))
+		for _, negative := range []bool{false, true} {
+			if negative {
+				x.Neg(x)
+			}
+			want := new(big.Int).Mul(x, y)
+
+			if got := mulInto(new(big.Int), x, y); got.Cmp(want) != 0 {
+				t.Fatalf("fresh destination mismatch at %d words (negative=%v)", words, negative)
+			}
+			xAlias := new(big.Int).Set(x)
+			if got := mulInto(xAlias, xAlias, y); got.Cmp(want) != 0 {
+				t.Fatalf("x alias mismatch at %d words (negative=%v)", words, negative)
+			}
+			yAlias := new(big.Int).Set(y)
+			if got := mulInto(yAlias, x, yAlias); got.Cmp(want) != 0 {
+				t.Fatalf("y alias mismatch at %d words (negative=%v)", words, negative)
+			}
+		}
+	}
+}

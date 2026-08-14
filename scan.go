@@ -35,6 +35,11 @@ type scanner struct {
 	// decreasing; digits[len(digits)-1] <= quadraticScanThreshold.
 	digits []int
 	pow    []*big.Int
+
+	// tmp[d] holds the scaled left half while the right half at depth d is
+	// scanned into its destination. Calls at the same depth are sequential,
+	// so one reusable multiplication destination per depth is sufficient.
+	tmp []big.Int
 }
 
 // init builds the power table for an input of size decimal digits. It is O(size)
@@ -60,6 +65,7 @@ func (s *scanner) initAt(size, top int) {
 		return
 	}
 	s.pow = make([]*big.Int, len(s.digits))
+	s.tmp = make([]big.Int, len(s.digits))
 	last := len(s.digits) - 1
 	s.pow[last] = new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(s.digits[last])), nil)
 	for d := last - 1; d >= 0; d-- {
@@ -88,8 +94,8 @@ func (s *scanner) scan(z *big.Int, str string, depth int) {
 	}
 	// Scan the left half.
 	s.scan(z, str[:len(str)-sz], depth+1)
-	// FIXME: reuse temporaries.
-	left := Mul(z, s.pow[depth])
+	left := &s.tmp[depth]
+	mulInto(left, z, s.pow[depth])
 	// Scan the right half.
 	s.scan(z, str[len(str)-sz:], depth+1)
 	z.Add(z, left)

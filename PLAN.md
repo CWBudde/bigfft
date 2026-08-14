@@ -17,7 +17,7 @@ tooling and pursues performance work the original explicitly left as a proof of 
 | Decimal scanning        | done: balanced split, -4% serial / -8% parallel          |
 | Plan 9 assembly         | done; linknames gone, fused Add/Sub tails on amd64/arm64 |
 | Coefficient planning    | done for measured amd64 k=12 plateaus, up to -19%        |
-| Cache blocking and rest | not started                                              |
+| Follow-up performance   | pool + scan reuse done; cache/recursive measured out     |
 
 ## Measurement discipline (read this before touching performance)
 
@@ -121,6 +121,18 @@ arithmetic kernels have architecture-specific assembly and `fermat.go` is full o
     of 1024 pointwise products (1038 allocs/op, worse than no arena). Every arena
     sub-slice therefore uses three-index slicing so `cap == len`.
     `TestArenaCapacitiesBounded` guards this and has been verified to fail when reverted.
+- [x] **Bounded `sync.Pool` reuse for scratch arenas.** Repeated multiplies with the same
+      plan now reuse exact `(k, n, worker-count)` arena shapes. Mismatches are discarded,
+      and arenas above 16 MiB bypass the pool entirely so a one-off huge multiplication
+      cannot leave its workspace in global state. Poisoned-reuse and concurrent race tests
+      guard the zeroing and ownership assumptions.
+  - Ten interleaved serial repetitions: allocated bytes fell **84.9% at 200 kbit, 85.7%
+    at 1 Mbit and 85.9% at 5 Mbit**; allocation counts fell 23-29%. Wall time improved
+    **11.7% at 200 kbit (p=0.023)** and **9.7% at 1 Mbit (p=0.009)**, and was flat at
+    5 Mbit (p=0.143). A 20 Mbit control exceeds the retention cap and was exactly flat in
+    bytes/allocations, with wall time p=0.842.
+  - On four P-cores, time was flat at 1/5 Mbit (p=1.000/0.353), while bytes still fell
+    about 77%. The library remains arithmetic-bound once parallel work dominates.
 - [x] **Word-aligned shift guard**: `fermat.Shift` ended with an unconditional
       `shlVU(z, z, kb)`, which for `kb == 0` is a full-length copy of a buffer onto itself.
       Instrumentation showed 41% (5 Mb) to 71% (1 Mb) of `Shift` calls are word-aligned,
@@ -187,6 +199,14 @@ arithmetic kernels have architecture-specific assembly and `fermat.go` is full o
     that the first version introduced.
   - `TestScanPowerTable` and `TestScanThresholds` are always-on guards, **verified to fail
     when the odd-length correction is removed**.
+- [x] **Reused decimal-scan multiplication destinations.** The scanner owns one `big.Int`
+      temporary per recursion depth, and the internal multiply path can evaluate both
+      `math/big` and FFT products into caller-owned result storage. `Mul` still returns a
+      fresh `*big.Int`; this only changes internal ownership.
+  - Ten interleaved serial repetitions cut bytes/op by **28.9% at 10k digits, 28.7% at
+    100k, 20.0% at 1M and 15.9% at 2M**. Allocations fell **32.5%, 54.7%, 58.3% and
+    58.5%** respectively, all p=0.000. Time improved 4.2% at 100k (p=0.035) and had no
+    measured difference at the other sizes (p=0.165-0.280).
 
 - [x] **Owned Plan 9 arithmetic and fused Add/Sub butterfly tails.** The six unexported
       `math/big` linknames are gone. `addVV`, `subVV`, `lshVU`, and `addMulVVW` are now
@@ -267,6 +287,49 @@ The general lesson is rule 5 above: this was proposed on a plausible reading of 
 profile (`fermat.Shift` at 22%) without checking which _path_ through `Shift` that 22%
 represented. It was the even path.
 
+### ~~Cache-blocked / fused transform levels~~ — no end-to-end win
+
+A cache-pass-fusion prototype combined two adjacent reconstruction levels once a subtree
+exceeded 1.25 MiB. Four coefficients stayed hot and one intermediate child-array
+read/write pass disappeared. Instrumentation confirmed that production used it once per
+transform at 5 Mbit and at the root plus four child subtrees at 10 Mbit. Differential
+forward/inverse tests forced the fused path at every eligible level, including the parallel
+schedule, and race, 386 and WebAssembly tests passed.
+
+It did not improve the public multiplication. Ten interleaved serial repetitions with ten
+operations per sample:
+
+| Workload      | Baseline |    Fused | Result             |
+| ------------- | -------: | -------: | ------------------ |
+| `MulFFT_2Mb`  | 8.405 ms | 8.080 ms | p=0.190 control    |
+| `MulFFT_5Mb`  | 24.86 ms | 23.85 ms | -4.1%, **p=0.052** |
+| `MulFFT_10Mb` | 57.44 ms | 60.55 ms | +5.4%, **p=0.063** |
+
+Neither gated workload crossed the significance threshold, their directions disagree, and
+the geomean across the control and gated cases was -0.9%. The refactor incidentally removed
+six small closure allocations per multiplication, but not allocated bytes; bounded arena
+pooling removes much more allocation without coupling adjacent FFT levels. The fusion was
+therefore not retained.
+
+### ~~Recursive Schönhage–Strassen pointwise products~~ — crossover is impractically large
+
+On the measured amd64 path, real transformed-value distributions are dense but small:
+median/p99/max were all 64 words
+at 1 Mbit, 80 at 5 Mbit and 384 at 100 Mbit. Even the largest existing public benchmark,
+1 Gbit per operand, plans `k=16` with 65,536 pointwise products of at most 1,024 words,
+below the 1,800-word FFT crossover. `TestRecursivePointwiseMulBenchmarkReachability`
+records this mechanically on 64-bit builds; 32-bit reaches larger word counts but cannot
+fit the multi-gigabyte outer workload needed for an end-to-end crossover measurement.
+
+The first plan above that crossover has 2,048-word values at about 1.877 Gbit per operand,
+requiring roughly 4.16 GB of active memory. A forced recursive prototype was still flat/
+slower there (444.5 vs 487.5 µs, p=0.280). Its first significant micro-benchmark win was
+at 4,096 words (-23.8%, p=0.001), reached around 4.024 Gbit per operand with about 8.46 GB
+active memory. The naive nested FFT also allocated 608,880 bytes per pointwise product —
+about 40 GB cumulatively across 65,536 points — so a production version would first need
+nested scratch and header reuse. Those workloads cannot be calibrated end to end on this
+machine, and no current reachable workload benefits, so no dispatch was added.
+
 ### ~~A separate threshold for the parallel path~~ — the crossover barely moves
 
 The idea, carried at the top of the to-do list since the parallel path landed: `fftThreshold`
@@ -321,17 +384,6 @@ Roughly in expected-value order.
 
 ### 1. Smaller items
 
-- [ ] **Cache-blocked / six-step transform** for sizes whose working set exceeds L2. At
-      5 Mb the transform is memory-bound, which is also why fusing passes is the recurring
-      theme above.
-- [ ] **Recursive Schönhage–Strassen for the pointwise products** instead of delegating to
-      `big.Int.Mul`, once the values are large enough for that to pay.
-- [ ] **`sync.Pool` for arenas**, now that a per-call arena exists. Worth it only if a
-      workload does many multiplies; measure before adding global state.
-- [ ] **Reuse scan temporaries** — `scan.go` carries a `// FIXME: reuse temporaries.` and
-      allocates a fresh `big.Int` per recursion level. `FromDecimalString` also builds a
-      fresh power table per call, which is now sized for the specific input and so cannot
-      be cached across calls of different lengths — but the `Mul` destinations can be.
 - [ ] **Wisdom-style persisted auto-tuning** to replace the hand-run `-calibrate` flag.
 - [ ] **Fuzz targets** for `Mul` and `FromDecimalString`, wired to a time-budgeted CI job.
 - [ ] **Big-endian coverage**. 32-bit is already covered by the `GOARCH=386` leg.

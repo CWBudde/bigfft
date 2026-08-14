@@ -166,6 +166,28 @@ one metric on this machine that can be trusted without the pinning protocol. The
 wall-clock effect of this change alone was within noise: the library is arithmetic-bound,
 not allocation-bound.
 
+### Bounded arena pooling
+
+The per-call arena is now reused through `sync.Pool` when its retained size is at most
+16 MiB. Reuse requires the exact `(k, n, worker-count)` shape; mismatches are discarded and
+larger arenas bypass the pool before `Get`, so cold or huge calls keep the old allocation
+path. Poisoned-arena and concurrent race tests verify that every live region is overwritten
+before it is read and that returned products do not alias pooled storage.
+
+Ten interleaved repetitions, serial and pinned to CPU 0, ten operations per sample:
+
+| Operand | Time change           | B/op change | allocs/op change |
+| ------- | --------------------- | ----------: | ---------------: |
+| 200 kb  | -11.65% (`p=0.023`)   |     -84.85% |          -23.08% |
+| 1 Mb    | -9.68% (`p=0.009`)    |     -85.74% |          -28.57% |
+| 5 Mb    | ~ (`p=0.143`)         |     -85.93% |          -28.57% |
+| 20 Mb   | ~ (`p=0.842`, bypass) |           ~ |                ~ |
+
+On four pinned P-cores, 1/5 Mb wall time remained flat (`p=1.000`/`0.353`), while bytes/op
+fell about 77% and allocation counts fell 6-7%. The serial small-size wins come from
+avoiding allocation and clearing; once arithmetic is distributed across cores, that work
+is no longer a measurable share.
+
 ## Balanced splitting in decimal scanning
 
 `FromDecimalString` splits its input, converts each half, and reassembles them with a
@@ -231,6 +253,25 @@ rather than `(10^14)^(threshold/14)`, so `quadraticScanThreshold` is no longer r
 be a multiple of 14 — any value is legal. And inputs at or below the threshold skip the
 scanner entirely, which removed a 3.4% regression at 1,000 digits that the first version
 introduced.
+
+### Reused scan destinations
+
+The scanner now keeps one multiplication destination per recursion depth. An internal
+destination-aware multiply evaluates `math/big` products into the existing `big.Int`
+storage and lets FFT reconstruction reuse caller-owned result capacity; the public `Mul`
+API still returns a fresh `*big.Int`.
+
+Ten interleaved serial repetitions:
+
+| Digits | Time change        | B/op change | allocs/op change |
+| ------ | ------------------ | ----------: | ---------------: |
+| 10k    | ~ (`p=0.165`)      |     -28.90% |          -32.47% |
+| 100k   | -4.15% (`p=0.035`) |     -28.70% |          -54.67% |
+| 1M     | ~ (`p=0.280`)      |     -20.01% |          -58.30% |
+| 2M     | ~ (`p=0.218`)      |     -15.92% |          -58.53% |
+
+The deterministic allocation reduction, rather than a broad timing claim, is the reason
+to keep this change.
 
 ## Plateau-aware FFT planning
 

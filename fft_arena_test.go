@@ -3,6 +3,7 @@ package bigfft
 import (
 	"math/big"
 	"math/rand"
+	"sync"
 	"testing"
 	"unsafe"
 )
@@ -130,6 +131,24 @@ func arenaRegions(s *fftScratch) []arenaRegion {
 	}
 }
 
+// poisonArena fills every word region, including every worker's private
+// temporaries, with nonzero data. A successful multiplication after this
+// proves that pooled arenas do not rely on make's initial zeroing.
+func poisonArena(s *fftScratch) {
+	regions := [][]big.Word{s.a, s.b, s.c, s.u}
+	for i := range s.fts {
+		regions = append(regions, s.fts[i].tmp, s.fts[i].tmp2)
+	}
+	for i := range s.mbufs {
+		regions = append(regions, s.mbufs[i])
+	}
+	for _, region := range regions {
+		for i := range region {
+			region[i] = ^big.Word(0)
+		}
+	}
+}
+
 // overlaps reports whether the two word slices share any storage.
 func overlaps(a, b []big.Word) bool {
 	if len(a) == 0 || len(b) == 0 {
@@ -234,5 +253,67 @@ func TestArenaRegionsDisjoint(t *testing.T) {
 	// The inverse transform destination must not alias the values it reads.
 	if overlaps(s.hIn[0], s.hP[0]) || overlaps(s.hIn[0], s.hQ[0]) {
 		t.Error("hIn must be disjoint from hP and hQ")
+	}
+}
+
+func TestFFTScratchPoolReuseAfterPoison(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x7001ed))
+	xb := arenaRandNat(rng, fftThreshold+1)
+	yb := arenaRandNat(rng, fftThreshold+37)
+	plan := selectFFTPlan(xb, yb)
+	x, y := natToInt(xb), natToInt(yb)
+	want := new(big.Int).Mul(x, y)
+	xp := polyFromNat(xb, plan.k, plan.m)
+	yp := polyFromNat(yb, plan.k, plan.m)
+	s := newFFTScratch(plan.k, plan.n)
+	for i := 0; i < 4; i++ {
+		poisonArena(s)
+		rp := xp.mul(&yp, s)
+		got := new(big.Int).SetBits(rp.Int())
+		if got.Cmp(want) != 0 {
+			t.Fatalf("poisoned pooled multiplication %d differs from math/big", i)
+		}
+	}
+}
+
+func TestFFTScratchPoolRetentionLimit(t *testing.T) {
+	if !poolableFFTScratch(&fftScratch{bytes: maxPooledFFTScratchBytes}) {
+		t.Fatal("scratch arena at the retention limit is not poolable")
+	}
+	if poolableFFTScratch(&fftScratch{bytes: maxPooledFFTScratchBytes + 1}) {
+		t.Fatal("scratch arena above the retention limit is poolable")
+	}
+	if poolableFFTScratch(nil) {
+		t.Fatal("nil scratch arena is poolable")
+	}
+}
+
+func TestFFTScratchPoolConcurrentMul(t *testing.T) {
+	const goroutines = 6
+	start := make(chan struct{})
+	errs := make(chan int, goroutines)
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			rng := rand.New(rand.NewSource(int64(0xc0ffee + g)))
+			x := natToInt(arenaRandNat(rng, fftThreshold+1))
+			y := natToInt(arenaRandNat(rng, fftThreshold+1))
+			want := new(big.Int).Mul(x, y)
+			<-start
+			for i := 0; i < 3; i++ {
+				if got := Mul(x, y); got.Cmp(want) != 0 {
+					errs <- g
+					return
+				}
+			}
+		}(g)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for g := range errs {
+		t.Errorf("concurrent pooled multiplication in goroutine %d differs from math/big", g)
 	}
 }

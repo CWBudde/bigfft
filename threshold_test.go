@@ -167,6 +167,25 @@ func TestFermatBasicMulThresholdReachable(t *testing.T) {
 	}
 }
 
+// TestRecursivePointwiseMulBenchmarkReachability records whether any balanced
+// public benchmark reaches point values large enough to enter this library's
+// FFT recursively. The recursive pointwise prototype first won well above
+// this boundary; if a future planner makes it reachable, the rejected PLAN.md
+// item deserves re-measurement rather than silently remaining stale.
+func TestRecursivePointwiseMulBenchmarkReachability(t *testing.T) {
+	if _W != 64 {
+		t.Skip("recursive pointwise crossover was measured on 64-bit")
+	}
+	for _, bits := range []int{1e6, 5e6, 10e6, 20e6, 50e6, 100e6, 200e6, 500e6, 1e9} {
+		plan := selectFFTPlanWords(2 * (bits / _W))
+		if plan.n > fftThreshold {
+			t.Errorf("%s bits/operand reaches n=%d > fftThreshold=%d; "+
+				"re-measure recursive pointwise multiplication", siBits(int64(bits)),
+				plan.n, fftThreshold)
+		}
+	}
+}
+
 // TestParallelDispatchOverlap records where the two dispatch gates sit relative
 // to each other, mechanically, so the relationship cannot drift unnoticed.
 //

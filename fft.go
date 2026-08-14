@@ -33,20 +33,31 @@ var fftThreshold = 1800
 // It can be used instead of the Mul method of
 // *big.Int from math/big package.
 func Mul(x, y *big.Int) *big.Int {
+	return mulInto(new(big.Int), x, y)
+}
+
+// mulInto is Mul with caller-supplied result storage. It is kept internal
+// because the public API historically returns a fresh *big.Int, while the
+// decimal scanner can reuse one destination per recursion depth.
+func mulInto(z, x, y *big.Int) *big.Int {
 	xwords := len(x.Bits())
 	ywords := len(y.Bits())
 	if xwords > fftThreshold && ywords > fftThreshold {
-		return mulFFT(x, y)
+		return mulFFTInto(z, x, y)
 	}
-	return new(big.Int).Mul(x, y)
+	return z.Mul(x, y)
 }
 
 func mulFFT(x, y *big.Int) *big.Int {
+	return mulFFTInto(new(big.Int), x, y)
+}
+
+func mulFFTInto(z, x, y *big.Int) *big.Int {
+	negative := x.Sign()*y.Sign() < 0
 	var xb, yb nat = x.Bits(), y.Bits()
-	zb := fftmul(xb, yb)
-	z := new(big.Int)
+	zb := fftmulInto(xb, yb, z.Bits())
 	z.SetBits(zb)
-	if x.Sign()*y.Sign() < 0 {
+	if negative {
 		z.Neg(z)
 	}
 	return z
@@ -56,15 +67,24 @@ func mulFFT(x, y *big.Int) *big.Int {
 // N = x.Bitlen() + y.Bitlen().
 
 func fftmul(x, y nat) nat {
+	return fftmulInto(x, y, nil)
+}
+
+// fftmulInto is fftmul with reusable result storage. dst may alias either
+// input: the operands have been fully transformed before the reconstructed
+// polynomial is evaluated into dst.
+func fftmulInto(x, y, dst nat) nat {
 	plan := selectFFTPlan(x, y)
 	xp := polyFromNat(x, plan.k, plan.m)
 	yp := polyFromNat(y, plan.k, plan.m)
-	// A single scratch arena is allocated here and threaded through every
-	// stage of the transform. It dies when fftmul returns: the nat produced
-	// by Int() is freshly allocated and does not alias it (see poly.Int).
-	s := newFFTScratch(plan.k, plan.n)
+	// A single scratch arena is threaded through every stage of the transform.
+	// The result uses caller-owned storage and does not alias the arena (see
+	// poly.intInto), so the arena can be reused after intInto returns.
+	s := getFFTScratch(plan.k, plan.n)
 	rp := xp.mul(&yp, s)
-	return rp.Int()
+	z := rp.intInto(dst)
+	putFFTScratch(s)
+	return z
 }
 
 // fourierTemps is the pair of temporary registers needed by one running
@@ -110,9 +130,10 @@ type fourierTemps struct {
 //     b never clobbers an operand that is still needed: iteration i reads
 //     only index i of each operand.
 //   - The poly returned by the inverse transform aliases region a. It is
-//     consumed by poly.Int, which accumulates into a freshly made nat and
-//     returns a prefix of it (see trim), so the value handed back by
-//     fftmul is disjoint from the arena and the arena may be collected.
+//     consumed by poly.intInto, which accumulates into caller-owned or newly
+//     allocated result storage and returns a prefix of it (see trim), so the
+//     value handed back by fftmul is disjoint from the arena and the arena may
+//     be collected.
 //
 // Header arrays are carved the same way: one []fermat of 4*K supplies the
 // staging, p-values, q-values and product-values headers, and one []nat of
@@ -121,6 +142,11 @@ type fftScratch struct {
 	k uint
 	n int
 	w int // number of workers this arena is dimensioned for
+
+	// bytes is the total retained size of the arena's backing allocations.
+	// It is recorded at construction so the pool can reject unusually large
+	// multiplication workspaces without redoing the layout calculation.
+	bytes int
 
 	a, b, c []big.Word
 
@@ -139,10 +165,52 @@ type fftScratch struct {
 	mbuf fermat       // worker 0's buffer, aliases mbufs[0]
 }
 
+// Keep pooling deliberately modest. A scratch arena is useful to retain for
+// repeated medium-sized products, but retaining a workspace from a one-off
+// huge multiplication is surprising global memory growth. sync.Pool may also
+// keep one item per scheduler P until a later GC, so this is a per-arena cap,
+// not a promise about aggregate process memory.
+const maxPooledFFTScratchBytes = 16 << 20
+
+var fftScratchPool sync.Pool
+
+func getFFTScratch(k uint, n int) *fftScratch {
+	w := parallelWorkers(k, n)
+	// Skip sync.Pool entirely for workspaces that cannot be returned to it.
+	// Besides avoiding pointless global traffic, this keeps one-off huge
+	// multiplications on the same allocation path as before pooling existed.
+	if fftScratchBytes(k, n, w) > maxPooledFFTScratchBytes {
+		return newFFTScratchForWorkers(k, n, w)
+	}
+	if s, _ := fftScratchPool.Get().(*fftScratch); s != nil {
+		// An arena's internal headers point at an exact layout, so only an
+		// identical plan and worker count can reuse it safely. A mismatched
+		// item is dropped rather than put back: this keeps the pool bounded by
+		// sync.Pool's per-P lifecycle instead of growing a permanent key map.
+		if s.k == k && s.n == n && s.w == w {
+			return s
+		}
+	}
+	return newFFTScratchForWorkers(k, n, w)
+}
+
+func putFFTScratch(s *fftScratch) {
+	if poolableFFTScratch(s) {
+		fftScratchPool.Put(s)
+	}
+}
+
+func poolableFFTScratch(s *fftScratch) bool {
+	return s != nil && s.bytes <= maxPooledFFTScratchBytes
+}
+
 func newFFTScratch(k uint, n int) *fftScratch {
+	return newFFTScratchForWorkers(k, n, parallelWorkers(k, n))
+}
+
+func newFFTScratchForWorkers(k uint, n, W int) *fftScratch {
 	K := 1 << k
 	N := n + 1
-	W := parallelWorkers(k, n)
 	s := &fftScratch{k: k, n: n, w: W}
 
 	// Every sub-slice below is capacity-bounded. This is not just hygiene:
@@ -177,7 +245,17 @@ func newFFTScratch(k uint, n int) *fftScratch {
 		s.hR[i] = fermat(s.b[lo:hi:hi])
 	}
 	s.hA = make([]nat, K)
+	s.bytes = fftScratchBytes(k, n, W)
 	return s
+}
+
+func fftScratchBytes(k uint, n, w int) int {
+	K := 1 << k
+	N := n + 1
+	wordBytes := int(unsafe.Sizeof(big.Word(0)))
+	sliceBytes := int(unsafe.Sizeof([]big.Word(nil)))
+	return (3*N*K+N+w*2*N+w*8*n)*wordBytes +
+		(5*K+3*w)*sliceBytes + int(unsafe.Sizeof(fftScratch{}))
 }
 
 // zeroWords clears x. The compiler turns this loop into a memclr.
@@ -338,11 +416,22 @@ func polyFromNat(x nat, k uint, m int) poly {
 
 // Int evaluates back a poly to its integer value.
 func (p *poly) Int() nat {
+	return p.intInto(nil)
+}
+
+// intInto is Int with optional reusable result storage.
+func (p *poly) intInto(dst nat) nat {
 	length := len(p.a)*p.m + 1
 	if na := len(p.a); na > 0 {
 		length += len(p.a[na-1])
 	}
-	n := make(nat, length)
+	var n nat
+	if cap(dst) >= length {
+		n = dst[:length]
+		zeroWords(n)
+	} else {
+		n = make(nat, length)
+	}
 	m := p.m
 	np := n
 	for i := range p.a {
