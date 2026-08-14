@@ -12,11 +12,10 @@ import (
 // polValues.InvTransform and polValues.Mul.
 //
 // Sizes are not invented: they are derived at run time from the same
-// functions the production code uses. For an input of B bits per operand,
-// fftSize(x, y) yields the FFT length k and the chunk size m, and
-// valueSize(k, m, 2) yields n, the coefficient length in words used by
-// poly.Mul (extra=2, exactly as in poly.Mul). So every (n, k) pair below is
-// the pair the FFT path really uses for that input size.
+// production planner. For an input of B bits per operand, selectFFTPlan yields
+// the FFT length k, chunk size m, and coefficient length n used by poly.Mul.
+// So every (n, k) pair below is the pair the FFT path really uses for that
+// input size.
 //
 // The representative inputs are ~100kb, ~1Mb and ~5Mb per operand, which on
 // a 64-bit platform come out as:
@@ -73,15 +72,14 @@ type benchSize struct {
 
 func (s benchSize) name() string { return fmt.Sprintf("n=%d/k=%d", s.n, s.k) }
 
-// benchSizes derives the (n, k) table from fftSize/valueSize, exactly as
-// fftmul and poly.Mul do.
+// benchSizes derives the (n, k) table exactly as fftmul does.
 var benchSizes = func() []benchSize {
 	inputs := []int{100e3, 1e6, 5e6}
 	sizes := make([]benchSize, 0, len(inputs))
 	for _, bits := range inputs {
 		w := bits / _W
-		k, m := fftSize(make(nat, w), make(nat, w))
-		sizes = append(sizes, benchSize{bits: bits, k: k, m: m, n: valueSize(k, m, 2)})
+		plan := selectFFTPlan(make(nat, w), make(nat, w))
+		sizes = append(sizes, benchSize{bits: bits, k: plan.k, m: plan.m, n: plan.n})
 	}
 	return sizes
 }()
@@ -216,8 +214,8 @@ func benchPolys(s benchSize) (p, q poly, n int) {
 	w := s.bits / _W
 	x := benchRndNat(w)
 	y := benchRndNat(w)
-	k, m := fftSize(x, y)
-	return polyFromNat(x, k, m), polyFromNat(y, k, m), valueSize(k, m, 2)
+	plan := selectFFTPlan(x, y)
+	return polyFromNat(x, plan.k, plan.m), polyFromNat(y, plan.k, plan.m), plan.n
 }
 
 func BenchmarkTransform(b *testing.B) {
