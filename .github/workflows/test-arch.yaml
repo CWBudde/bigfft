@@ -74,6 +74,15 @@ jobs:
             os: ubuntu-latest
             race: false
             use_qemu: true
+            qemu_exec: qemu-aarch64-static
+
+          # loong64 on Linux (portable arithmetic, executed under QEMU)
+          - goos: linux
+            goarch: loong64
+            os: ubuntu-latest
+            race: false
+            use_qemu: true
+            qemu_exec: qemu-loongarch64-static
 
           # arm64 on macOS (native)
           - goos: darwin
@@ -95,7 +104,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Set up QEMU (ARM64 cross-compile)
+      - name: Set up QEMU
         if: matrix.use_qemu
         run: |
           sudo apt-get update
@@ -136,17 +145,32 @@ jobs:
         run: go test -v -race -count=1 -timeout=20m ./...
 
       - name: Run tests (without race detector)
-        if: ${{ !matrix.race }}
+        if: ${{ !matrix.race && !matrix.use_qemu }}
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go test -v -count=1 -timeout=30m ./...
 
+      - name: Run tests (QEMU)
+        if: matrix.use_qemu
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go test -exec=${{ matrix.qemu_exec }} -v -count=1 -timeout=30m ./...
+
       # The fallback is a supported configuration, not dead code. Exercise it
       # on every architecture; assembly remains enabled in the default run
       # above so asmdecl can still validate frame sizes and FP references.
       - name: Run tests (purego)
+        if: ${{ !matrix.use_qemu }}
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go test -tags purego -v -count=1 -timeout=30m ./...
+
+      - name: Run tests (purego, QEMU)
+        if: matrix.use_qemu
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go test -exec=${{ matrix.qemu_exec }} -tags purego -v -count=1 -timeout=30m ./...
