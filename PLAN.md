@@ -382,8 +382,67 @@ look like a finding. It had never been measured.
 
 Roughly in expected-value order.
 
-### 1. Smaller items
+### 1. Dedicated FFT squaring path
+
+- [ ] **Transform an operand only once for `Mul(x, x)`.** The current FFT path builds and
+      transforms two identical polynomials, then sends each pair of equal transformed values
+      through the generic multiplication path. Detect the ordinary pointer-identical squaring
+      case at the public dispatch boundary, reuse one forward transform, and add a pointwise
+      square operation that lets `math/big` reach its specialized squaring implementation.
+      The inverse transform and reconstruction stay unchanged. At the 5 Mbit profile split,
+      removing one of three transforms has an end-to-end ceiling of roughly 15% before any
+      pointwise-square benefit, and needs no larger arena.
+  - Add differential coverage for zero, signs, alias-sensitive inputs and the serial/parallel
+    schedules. Benchmark dedicated square workloads separately from multiplication; do not
+    infer the result from transform micro-benchmarks.
+
+### 2. Fused twiddle butterfly
+
+- [ ] **Apply the twiddle while producing the sum and difference.** `butterflies` currently
+      writes `ShiftHalf(dst2[i])` to `tmp`, then reads `tmp` again in the fused Add/Sub kernel.
+      A combined kernel can traverse the rotated source and produce both outputs without
+      materializing the shifted coefficient. `fermat.Shift` is about 22% of the 5 Mbit serial
+      profile, so this is the remaining transform experiment with a meaningful ceiling.
+  - Start with the even-`k`/word-aligned cases that account for almost all production
+    `ShiftHalf` calls, retaining the existing path as the odd or unaligned fallback. This is
+    distinct from the rejected shift-mod dispatch: that experiment made `Shift` faster but
+    preserved the temporary and the second memory pass.
+  - Differential-test carries, borrows, modular normalization, negative shifts and exact
+    aliases against `ShiftHalf` followed by `butterfly`. Keep architecture assembly only after
+    a same-binary Go prototype wins end to end under the measurement protocol.
+
+### 3. Generalize measured FFT-plan selection
+
+- [ ] **Calibrate adjacent transform lengths across every reachable `k`.** The existing amd64
+      `k=12` rule wins 5-19% in coefficient-padding windows, but all other transform lengths
+      still follow the coarse historical threshold table. Extend `BenchmarkFFTPlannerPlateaus`
+      to sweep valid `k-1`, `k` and `k+1` plans across the public range, including boundary
+      controls, and derive small deterministic per-architecture policies only where the result
+      repeats.
+  - Keep correctness constraints in `makeFFTPlan`; candidates must recompute both `m` and `n`.
+    Require an end-to-end public-benchmark win and a flat far side, just as for the retained
+    `k=12` policy. Do not replace a measured table with an unvalidated arithmetic cost model.
+
+### 4. Truncated transforms for asymmetric operands
+
+- [ ] **Avoid transforming known zero tails when operand sizes differ greatly.** The current
+      planner sizes the convolution from `len(x)+len(y)`, but both forward transforms still
+      produce all `K` values even when one input polynomial has far fewer coefficients. First
+      profile the existing `1x5`, `1x10`, `1x20` and `1x50` Mbit benchmarks and account for the
+      maximum removable work. If the ceiling is worthwhile, prototype an exact truncated FFT
+      for the shorter forward transform and the required inverse outputs.
+  - Treat this as an asymmetric-workload feature, not a replacement for the dense balanced
+    path. The indexing and normalization proof, bit-exact differential tests and allocation
+    budget are prerequisites before timing it.
+
+### 5. Smaller items
 
 - [ ] **Wisdom-style persisted auto-tuning** to replace the hand-run `-calibrate` flag.
 - [ ] **Fuzz targets** for `Mul` and `FromDecimalString`, wired to a time-budgeted CI job.
 - [ ] **Big-endian coverage**. 32-bit is already covered by the `GOARCH=386` leg.
+
+A Harvey–van der Hoeven Gaussian-resampling backend is deliberately not on this practical
+roadmap. It would replace the representation, transform and error model rather than optimize
+the present Fermat-ring implementation, while its useful crossover is unknown and far beyond
+the workloads that can be measured here. Recursive Schönhage–Strassen pointwise products stay
+in the rejected section above until reachable coefficient sizes or available memory change.
